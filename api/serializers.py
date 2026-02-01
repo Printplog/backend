@@ -310,12 +310,17 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         
         fonts_data = validated_data.pop('fonts', None)
         
+        # Skip expensive SVG re-parsing for admin edits
+        # The form_fields are read-only and shouldn't be regenerated on admin updates
+        # This avoids: DB query + full SVG string comparison + SVG parsing + file save
+        if 'svg' in validated_data:
+            instance.skip_svg_parse = True
+        
         instance = super().update(instance, validated_data)
         
         if fonts_data is not None:
             instance.fonts.set(fonts_data)
         
-        print(f"SERIALIZER UPDATE: Returning instance. SVG will be saved by Django ORM.")
         return instance
     
     def to_representation(self, instance):

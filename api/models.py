@@ -55,9 +55,12 @@ class Template(models.Model):
     
 
     def save(self, *args, **kwargs):
-        # Optimization: Only parse SVG if it has changed
+        # Allow bypassing SVG parsing for admin edits (performance optimization)
+        skip_parse = getattr(self, 'skip_svg_parse', False)
+        
+        # Optimization: Only parse SVG if it has changed AND we're not skipping
         should_parse = False
-        if self.svg:
+        if self.svg and not skip_parse:
             if self.pk:
                 try:
                     old_instance = Template.objects.only('svg').get(pk=self.pk)
