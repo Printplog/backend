@@ -42,6 +42,8 @@ except ImportError:
 
 
 class DownloadDoc(APIView):
+    permission_classes = [IsAuthenticated]
+    
     def post(self, request):
         print("=" * 60)
         print("=== DownloadDoc POST request started ===")
