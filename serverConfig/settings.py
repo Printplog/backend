@@ -183,8 +183,8 @@ if ENV == "production":
     AWS_S3_ENDPOINT_URL = os.getenv('BACKBLAZE_S3_ENDPOINT_URL', 'https://s3.us-west-004.backblazeb2.com')
     AWS_S3_REGION_NAME = os.getenv('BACKBLAZE_S3_REGION', 'us-west-004')
     
-    # B2 handles ACLs at the bucket level
-    AWS_DEFAULT_ACL = 'public-read'
+    # B2 doesn't support S3 ACLs; setting this to None or removing it avoids 403s
+    AWS_DEFAULT_ACL = None
     AWS_S3_SIGNATURE_VERSION = 's3v4'
     AWS_S3_FILE_OVERWRITE = False
     
