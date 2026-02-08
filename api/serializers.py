@@ -11,6 +11,7 @@ from django.utils import timezone
 from datetime import timedelta
 from accounts.serializers import CustomUserDetailsSerializer
 from .svg_updater import update_svg_from_field_updates
+from decimal import Decimal
 import hashlib
 import json
 
