@@ -176,14 +176,37 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Media files (User uploaded content)
 if ENV == "production":
-    # Use your production domain for media files
-    MEDIA_URL = os.getenv('MEDIA_URL', 'https://api.sharptoolz.com/media/')
+    # Backblaze B2 Storage Settings
+    DEFAULT_FILE_STORAGE = 'storages.backends.b2.B2Storage'
+    B2_ACCOUNT_ID = os.getenv('BACKBLAZE_B2_KEY_ID')
+    B2_APPLICATION_KEY = os.getenv('BACKBLAZE_B2_APPLICATION_KEY')
+    B2_BUCKET_NAME = os.getenv('BACKBLAZE_B2_BUCKET_NAME')
+    
+    # Optional: If using a custom domain (like Cloudflare), set B2_CUSTOM_DOMAIN
+    B2_CUSTOM_DOMAIN = os.getenv('BACKBLAZE_B2_CUSTOM_DOMAIN')
+    
+    if B2_CUSTOM_DOMAIN:
+        MEDIA_URL = f'https://{B2_CUSTOM_DOMAIN}/file/{B2_BUCKET_NAME}/'
+    else:
+        # Default B2 URL scheme
+        MEDIA_URL = f'https://f000.backblazeb2.com/file/{B2_BUCKET_NAME}/'
 else:
     MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
     # Add Cross-Origin-Resource-Policy header for development
     SECURE_CROSS_ORIGIN_OPENER_POLICY = None
     SECURE_REFERRER_POLICY = 'no-referrer-when-downgrade'
+
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# Django 4.2+ Storages configuration
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.b2.B2Storage" if ENV == "production" else "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 
 # File Upload Settings
 DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB
