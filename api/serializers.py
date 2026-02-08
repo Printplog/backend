@@ -191,11 +191,15 @@ class TemplateSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
+    tool_price = serializers.SerializerMethodField()
     
     class Meta:
         model = Template
         fields = '__all__'
     
+    def get_tool_price(self, obj):
+        return obj.tool.price if obj.tool else None
+
     def create(self, validated_data):
         # Extract tutorial data from request data
         request = self.context.get('request')
@@ -290,12 +294,16 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
+    tool_price = serializers.SerializerMethodField()
     
     class Meta:
         model = Template
         fields = '__all__'
         read_only_fields = ('id', 'created_at', 'updated_at', 'form_fields')
     
+    def get_tool_price(self, obj):
+        return obj.tool.price if obj.tool else None
+
     def create(self, validated_data):
         fonts_data = validated_data.pop('fonts', None)
         template = Template.objects.create(**validated_data)
@@ -364,6 +372,7 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
     field_updates = FieldUpdateSerializer(many=True, write_only=True, required=False)
     fonts = FontSerializer(many=True, read_only=True)
     banner = serializers.SerializerMethodField()
+    tool_price = serializers.SerializerMethodField()
     
     class Meta:
         model = PurchasedTemplate
@@ -384,11 +393,15 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
             if not hasattr(user, "wallet"):
                 raise serializers.ValidationError("User does not have a wallet.")
 
-            charge_amount = 5
-            if user.wallet.balance < charge_amount:
-                raise serializers.ValidationError("Insufficient funds to remove watermark.")
+            # Get charge amount from tool price, default to 5.00
+            charge_amount = Decimal('5.00')
+            if instance.template and instance.template.tool:
+                charge_amount = instance.template.tool.price or Decimal('5.00')
 
-            user.wallet.debit(charge_amount, description="Document purchase")
+            if user.wallet.balance < charge_amount:
+                raise serializers.ValidationError(f"Insufficient funds to remove watermark. Required: {charge_amount}")
+
+            user.wallet.debit(charge_amount, description=f"Document purchase: {instance.name}")
 
             # Remove watermark from SVG only when test changes from True to False
             svg = validated_data.get("svg")
@@ -462,6 +475,12 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         
         return representation
     
+    def get_tool_price(self, obj):
+        template = obj.template
+        if template and template.tool:
+            return template.tool.price
+        return None
+
     def get_banner(self, obj):
         template = obj.template
         if not template or not template.banner:

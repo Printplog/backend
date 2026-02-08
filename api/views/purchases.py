@@ -12,9 +12,17 @@ class PurchasedTemplateViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_staff:
-            return PurchasedTemplate.objects.all().order_by('-created_at')
-        return PurchasedTemplate.objects.filter(buyer=user).order_by('-created_at')
+        queryset = PurchasedTemplate.objects.select_related('buyer', 'template', 'template__tool').prefetch_related('fonts')
+        
+        if not user.is_staff:
+            queryset = queryset.filter(buyer=user)
+            
+        if self.action == 'list':
+            queryset = queryset.defer('svg', 'form_fields')
+        elif self.action == 'retrieve':
+            queryset = queryset.defer('svg')
+            
+        return queryset.order_by('-created_at')
 
     @action(detail=True, methods=['get'], url_path='svg')
     def get_svg(self, request, pk=None):

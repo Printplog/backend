@@ -131,6 +131,7 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
         return queryset.order_by('-created_at')
     
     @action(detail=True, methods=['get'], url_path='svg')
+    @cache_template_svg()
     def get_svg(self, request, pk=None):
         template = Template.objects.get(pk=pk)
         if template.svg_file:

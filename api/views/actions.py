@@ -79,19 +79,25 @@ class DownloadDoc(APIView):
             if not template_name:
                 template_name = purchased_template.name or ""
         except PurchasedTemplate.DoesNotExist:
-            print("ERROR: Purchased template not found")
+            print(f"ERROR: Purchased template not found. ID: {purchased_template_id}, User: {request.user.username}")
+            # Ownership Audit (Debug only)
+            exists_anywhere = PurchasedTemplate.objects.filter(id=purchased_template_id).first()
+            if exists_anywhere:
+                print(f"DEBUG: Document {purchased_template_id} EXISTS but belongs to {exists_anywhere.buyer.username}, not {request.user.username}")
+            else:
+                print(f"DEBUG: Document {purchased_template_id} DOES NOT EXIST in database at all.")
             return Response({"error": "Purchased template not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if not svg_content or "</svg>" not in svg_content:
-            print("ERROR: Invalid or missing SVG content")
+            print(f"ERROR: Invalid or missing SVG content for ID: {purchased_template_id}")
             return Response({"error": "Invalid or missing SVG content"}, status=status.HTTP_400_BAD_REQUEST)
 
         if output_type not in ("pdf", "png"):
-            print(f"ERROR: Unsupported output type: {output_type}")
+            print(f"ERROR: Unsupported output type: {output_type} for ID: {purchased_template_id}")
             return Response({"error": "Unsupported type. Only 'pdf' and 'png' are allowed."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            print("Starting download processing...")
+            print(f"Starting download processing for ID: {purchased_template_id} ({output_type})...")
             safe_name = re.sub(r'[^\w\s-]', '', template_name).strip() if template_name else ""
             safe_name = re.sub(r'[-\s]+', '-', safe_name) if safe_name else ""
             
@@ -104,6 +110,7 @@ class DownloadDoc(APIView):
                         keywords_to_check.extend(purchased_template.template.keywords)
                     
                     keywords_to_check = [str(k).lower().strip() for k in keywords_to_check if k]
+                    print(f"Keywords to check: {keywords_to_check}")
                     
                     if "horizontal-split-download" in keywords_to_check:
                         split_direction = "horizontal"
@@ -112,11 +119,13 @@ class DownloadDoc(APIView):
                     elif "split-download" in keywords_to_check:
                         split_direction = "horizontal"
                     
+                    print(f"Split direction: {split_direction}, Side: {side}")
+
                     if not safe_name and purchased_template.name:
                         safe_name = re.sub(r'[^\w\s-]', '', purchased_template.name).strip()
                         safe_name = re.sub(r'[-\s]+', '-', safe_name) if safe_name else ""
             
-            print("Checking for fonts to inject...")
+            print(f"Checking for fonts to inject for ID: {purchased_template_id}...")
             fonts_to_inject = []
             if purchased_template and purchased_template.template:
                 fonts_to_inject = list(purchased_template.template.fonts.all())
@@ -131,18 +140,24 @@ class DownloadDoc(APIView):
                 
                 if output_type == "pdf":
                     if PLAYWRIGHT_AVAILABLE:
+                        print("Using Playwright for PDF rendering...")
                         output = render_svg_with_playwright(svg_with_fonts, "pdf")
                     else:
+                        print("Using CairoSVG for PDF rendering (Playwright not available)...")
                         output = cairosvg.svg2pdf(bytestring=svg_content.encode("utf-8"))
                 else:  # PNG
                     if PLAYWRIGHT_AVAILABLE:
+                        print("Using Playwright for PNG rendering...")
                         output = render_svg_with_playwright(svg_with_fonts, "png")
                     else:
+                        print("Using CairoSVG for PNG rendering (Playwright not available)...")
                         output = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
             else:
                 if output_type == "pdf":
+                    print("Using CairoSVG for PDF rendering (no fonts)...")
                     output = cairosvg.svg2pdf(bytestring=svg_content.encode("utf-8"))
                 else:  # PNG
+                    print("Using CairoSVG for PNG rendering (no fonts)...")
                     output = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
             
             if output_type == "pdf":
@@ -157,14 +172,18 @@ class DownloadDoc(APIView):
             user.save()
             
             if split_direction:
+                print(f"Handling split download ({split_direction})...")
                 return self._handle_split_download(output, output_type, user, safe_name, split_direction, side)
             
+            print(f"Individual download successful: {filename}")
             response = HttpResponse(output, content_type=content_type)
             response["Content-Disposition"] = f'attachment; filename="{filename}"'
             return response
 
         except Exception as e:
+            print(f"CRITICAL ERROR in DownloadDoc processing: {str(e)}")
             error_traceback = traceback.format_exc()
+            print(error_traceback)
             return Response({"error": str(e), "traceback": error_traceback}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def _handle_split_download(self, output, output_type, user, safe_name="", split_direction="horizontal", side="front"):
@@ -193,11 +212,28 @@ class DownloadDoc(APIView):
                 
             else:  # PDF
                 try:
+                    import shutil
                     from pdf2image import convert_from_bytes
+                    
+                    # Check if pdftocairo or pdftoppm is available
+                    if not (shutil.which("pdftocairo") or shutil.which("pdftoppm")):
+                        print("ERROR: poppler-utils (pdftocairo/pdftoppm) not found on system paths")
+                        return Response({
+                            "error": "System dependency missing: poppler-utils. Please install it on the server (sudo apt install poppler-utils).",
+                            "technical_error": "Neither pdftocairo nor pdftoppm found."
+                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                        
                 except ImportError:
-                    return Response({"error": "PDF splitting requires pdf2image."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    print("ERROR: pdf2image library not installed")
+                    return Response({"error": "Python dependency missing: pdf2image. Please install it (pip install pdf2image)."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 
-                images = convert_from_bytes(output)
+                print("Converting PDF to image for splitting...")
+                try:
+                    images = convert_from_bytes(output)
+                except Exception as e:
+                    print(f"ERROR: convert_from_bytes failed: {str(e)}")
+                    return Response({"error": f"PDF conversion failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
                 if not images:
                     return Response({"error": "Failed to convert PDF to image"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 
