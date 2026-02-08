@@ -16,10 +16,11 @@ import os
 from dotenv import load_dotenv
 import dj_database_url
 
-load_dotenv()
-
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from the .env file in the backend directory
+load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 # Environment configuration
 ENV = os.getenv("ENV", "development")  # default to development
@@ -180,15 +181,30 @@ if ENV == "production":
     AWS_ACCESS_KEY_ID = os.getenv('BACKBLAZE_B2_KEY_ID')
     AWS_SECRET_ACCESS_KEY = os.getenv('BACKBLAZE_B2_APPLICATION_KEY')
     AWS_STORAGE_BUCKET_NAME = os.getenv('BACKBLAZE_B2_BUCKET_NAME')
-    AWS_S3_ENDPOINT_URL = os.getenv('BACKBLAZE_S3_ENDPOINT_URL', 'https://s3.us-west-004.backblazeb2.com')
-    AWS_S3_REGION_NAME = os.getenv('BACKBLAZE_S3_REGION', 'us-west-004')
+    AWS_S3_ENDPOINT_URL = os.getenv('BACKBLAZE_S3_ENDPOINT_URL', 'https://s3.us-east-005.backblazeb2.com')
+    AWS_S3_REGION_NAME = os.getenv('BACKBLAZE_S3_REGION', 'us-east-005')
     
     # B2 doesn't support S3 ACLs; setting this to None or removing it avoids 403s
     AWS_DEFAULT_ACL = None
     AWS_S3_SIGNATURE_VERSION = 's3v4'
     AWS_S3_FILE_OVERWRITE = False
     
-    MEDIA_URL = f'{AWS_S3_ENDPOINT_URL}/{AWS_STORAGE_BUCKET_NAME}/'
+    # Cloudflare CDN Configuration
+    AWS_S3_CUSTOM_DOMAIN = os.getenv('CLOUDFLARE_CDN_DOMAIN') # e.g. cdn.sharptoolz.com/sharptoolz
+    
+    if AWS_S3_CUSTOM_DOMAIN:
+        MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/'
+    else:
+        MEDIA_URL = f'{AWS_S3_ENDPOINT_URL}/{AWS_STORAGE_BUCKET_NAME}/'
+    
+    # Keep this TRUE because your bucket is Private
+    AWS_QUERYSTRING_AUTH = True
+    AWS_QUERYSTRING_EXPIRE = 3600 # Signature valid for 1 hour
+
+    # Cache control for CDN (set to 1 year for immutable files)
+    AWS_S3_OBJECT_PARAMETERS = {
+        'CacheControl': 'max-age=31536000, public',
+    }
 else:
     MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
     # Add Cross-Origin-Resource-Policy header for development
@@ -200,7 +216,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # Django 4.2+ Storages configuration
 STORAGES = {
     "default": {
-        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage" if ENV == "production" else "django.core.files.storage.FileSystemStorage",
+        "BACKEND": "api.storage_backends.MediaStorage" if ENV == "production" else "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
