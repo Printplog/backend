@@ -119,7 +119,7 @@ WSGI_APPLICATION = 'serverConfig.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-if ENV == "production":
+if ENV == "production" and os.getenv("DATABASE_URL"):
     DATABASES = {
         'default': {
             **dj_database_url.parse(os.getenv("DATABASE_URL")),
@@ -176,20 +176,19 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Media files (User uploaded content)
 if ENV == "production":
-    # Backblaze B2 Storage Settings
-    DEFAULT_FILE_STORAGE = 'storages.backends.b2.B2Storage'
-    B2_ACCOUNT_ID = os.getenv('BACKBLAZE_B2_KEY_ID')
-    B2_APPLICATION_KEY = os.getenv('BACKBLAZE_B2_APPLICATION_KEY')
-    B2_BUCKET_NAME = os.getenv('BACKBLAZE_B2_BUCKET_NAME')
+    # Backblaze B2 S3 Compatible Storage Settings
+    AWS_ACCESS_KEY_ID = os.getenv('BACKBLAZE_B2_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = os.getenv('BACKBLAZE_B2_APPLICATION_KEY')
+    AWS_STORAGE_BUCKET_NAME = os.getenv('BACKBLAZE_B2_BUCKET_NAME')
+    AWS_S3_ENDPOINT_URL = os.getenv('BACKBLAZE_S3_ENDPOINT_URL', 'https://s3.us-west-004.backblazeb2.com')
+    AWS_S3_REGION_NAME = os.getenv('BACKBLAZE_S3_REGION', 'us-west-004')
     
-    # Optional: If using a custom domain (like Cloudflare), set B2_CUSTOM_DOMAIN
-    B2_CUSTOM_DOMAIN = os.getenv('BACKBLAZE_B2_CUSTOM_DOMAIN')
+    # B2 handles ACLs at the bucket level
+    AWS_DEFAULT_ACL = 'public-read'
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+    AWS_S3_FILE_OVERWRITE = False
     
-    if B2_CUSTOM_DOMAIN:
-        MEDIA_URL = f'https://{B2_CUSTOM_DOMAIN}/file/{B2_BUCKET_NAME}/'
-    else:
-        # Default B2 URL scheme
-        MEDIA_URL = f'https://f000.backblazeb2.com/file/{B2_BUCKET_NAME}/'
+    MEDIA_URL = f'{AWS_S3_ENDPOINT_URL}/{AWS_STORAGE_BUCKET_NAME}/'
 else:
     MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
     # Add Cross-Origin-Resource-Policy header for development
@@ -201,7 +200,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # Django 4.2+ Storages configuration
 STORAGES = {
     "default": {
-        "BACKEND": "storages.backends.b2.B2Storage" if ENV == "production" else "django.core.files.storage.FileSystemStorage",
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage" if ENV == "production" else "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
