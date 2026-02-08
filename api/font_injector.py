@@ -198,12 +198,6 @@ def inject_fonts_into_svg(svg_content: str, fonts: List[Font], base_url: Optiona
     # Deduplicate font-faces by unique key (family + weight + style)
     # Map: normalized_variant_key -> (css_family, font_face_css)
     unique_font_map = {}
-    for css_family, font_face in font_faces:
-         # To be safe, we re-parse or pass key. 
-         # We already have the key in the tuple now: (key, css_family, font_face)
-         pass
-
-    unique_font_map = {}
     for variant_key, css_family, font_face in font_faces:
         if variant_key not in unique_font_map:
             unique_font_map[variant_key] = (css_family, font_face)
