@@ -1,3 +1,5 @@
+from django.conf import settings
+import sys
 from storages.backends.s3boto3 import S3Boto3Storage
 
 class MediaStorage(S3Boto3Storage):
@@ -19,12 +21,15 @@ class MediaStorage(S3Boto3Storage):
         signed_url = super().url(name, parameters, expire, http_method)
         self.custom_domain = orig_custom_domain
         
-        if self.custom_domain:
+        # Use the domain from settings if available
+        custom_domain = getattr(settings, 'AWS_S3_CUSTOM_DOMAIN', None) or self.custom_domain
+        
+        if custom_domain:
             # Replace the internal B2 hostname with our Cloudflare domain
             from urllib.parse import urlparse, urlunparse
             parsed_signed = urlparse(signed_url)
             # Replace the netloc (hostname) with our custom domain
-            new_parsed = parsed_signed._replace(netloc=self.custom_domain)
+            new_parsed = parsed_signed._replace(netloc=custom_domain)
             return urlunparse(new_parsed)
             
         return signed_url
