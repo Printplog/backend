@@ -182,7 +182,10 @@ if ENV == "production":
     AWS_SECRET_ACCESS_KEY = os.getenv('BACKBLAZE_B2_APPLICATION_KEY')
     AWS_STORAGE_BUCKET_NAME = os.getenv('BACKBLAZE_B2_BUCKET_NAME')
     AWS_S3_ENDPOINT_URL = os.getenv('BACKBLAZE_S3_ENDPOINT_URL', 'https://s3.us-east-005.backblazeb2.com')
-    AWS_S3_REGION_NAME = os.getenv('BACKBLAZE_S3_REGION', 'us-east-005')
+    AWS_S3_REGION_NAME = os.getenv('BACKBLAZE_S3_REGION', 'us-east-1')
+    
+    # Use virtual-host style addressing for B2
+    AWS_S3_ADDRESSING_STYLE = 'virtual'
     
     # B2 doesn't support S3 ACLs; setting this to None or removing it avoids 403s
     AWS_DEFAULT_ACL = None

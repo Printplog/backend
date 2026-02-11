@@ -193,6 +193,7 @@ class TemplateSerializer(serializers.ModelSerializer):
         required=False
     )
     tool_price = serializers.SerializerMethodField()
+    svg_url = serializers.SerializerMethodField()
     
     class Meta:
         model = Template
@@ -200,6 +201,12 @@ class TemplateSerializer(serializers.ModelSerializer):
     
     def get_tool_price(self, obj):
         return obj.tool.price if obj.tool else None
+
+    def get_svg_url(self, obj):
+        request = self.context.get('request')
+        if obj.svg_file and request:
+            return request.build_absolute_uri(obj.svg_file.url)
+        return obj.svg_file.url if obj.svg_file else None
 
     def create(self, validated_data):
         # Extract tutorial data from request data
@@ -274,8 +281,8 @@ class TemplateSerializer(serializers.ModelSerializer):
             representation.pop('form_fields', None)
             # Banner will be included automatically since it's in fields
         elif view and view.action == 'retrieve':
-            # For detail view: exclude SVG (will be loaded separately for better UX)
-            # Keep form_fields so forms can load immediately
+            # For detail view: keep form_fields so forms can load immediately
+            # We still keep svg_url (from SerializerMethodField) for the frontend to load
             representation.pop('svg', None)
         else:
             # For other actions (create, update): include SVG if present
@@ -296,6 +303,7 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         required=False
     )
     tool_price = serializers.SerializerMethodField()
+    svg_url = serializers.SerializerMethodField()
     
     class Meta:
         model = Template
@@ -304,6 +312,12 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
     
     def get_tool_price(self, obj):
         return obj.tool.price if obj.tool else None
+
+    def get_svg_url(self, obj):
+        request = self.context.get('request')
+        if obj.svg_file and request:
+            return request.build_absolute_uri(obj.svg_file.url)
+        return obj.svg_file.url if obj.svg_file else None
 
     def create(self, validated_data):
         fonts_data = validated_data.pop('fonts', None)
@@ -352,13 +366,13 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
                     representation['banner'] = f"https://api.sharptoolz.com{representation['banner']}"
         
         # For list view: remove SVG and form_fields, keep banner
+        # For list view: remove SVG and form_fields, keep banner
         if view and view.action == 'list':
             representation.pop('svg', None)
             representation.pop('form_fields', None)
             # Banner will be included automatically since it's in fields
         elif view and view.action == 'retrieve':
-            # For detail view: exclude SVG (will be loaded separately for better UX)
-            # Keep form_fields so forms can load immediately
+            # For detail view: keep form_fields so forms can load immediately
             representation.pop('svg', None)
         else:
             # For other actions (create, update): include SVG if present
@@ -374,6 +388,7 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
     fonts = FontSerializer(many=True, read_only=True)
     banner = serializers.SerializerMethodField()
     tool_price = serializers.SerializerMethodField()
+    svg_url = serializers.SerializerMethodField()
     
     class Meta:
         model = PurchasedTemplate
@@ -466,8 +481,7 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
             representation.pop('form_fields', None)
             representation.pop('svg', None)
         elif view and view.action == 'retrieve':
-            # For detail view: exclude SVG (will be loaded separately for better UX)
-            # Keep form_fields so forms can load immediately
+            # For detail view: keep form_fields so forms can load immediately
             representation.pop('svg', None)
         else:
             # For other actions (create, update): add watermark to SVG if it's a test template
@@ -481,6 +495,12 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         if template and template.tool:
             return template.tool.price
         return None
+
+    def get_svg_url(self, obj):
+        request = self.context.get('request')
+        if obj.svg_file and request:
+            return request.build_absolute_uri(obj.svg_file.url)
+        return obj.svg_file.url if obj.svg_file else None
 
     def get_banner(self, obj):
         template = obj.template

@@ -12,7 +12,7 @@ class MediaStorage(S3Boto3Storage):
     def url(self, name, parameters=None, expire=None, http_method=None):
         # We want signatures even on the custom domain because the bucket is private
         # By default S3Boto3Storage disables signatures if custom_domain is set.
-        # So we temporarily unset it to get the signed URL, then swap the domain.
+        # So we temporarily unset it to get the signed URL, then restore it.
         
         orig_custom_domain = self.custom_domain
         self.custom_domain = None
@@ -20,14 +20,11 @@ class MediaStorage(S3Boto3Storage):
         self.custom_domain = orig_custom_domain
         
         if self.custom_domain:
-            # Replace the B2 endpoint with our Cloudflare CDN domain
-            # B2 endpoint is usually like 's3.us-east-005.backblazeb2.com/bucketname'
-            # Or 'bucketname.s3.us-east-005.backblazeb2.com'
-            import re
-            # Extract bucket name and endpoint for replacement
-            # Standard B2 path: https://s3.region.backblazeb2.com/bucket/path
-            pattern = rf'https://[^/]+/{self.bucket_name}/'
-            replacement = f'https://{self.custom_domain}/'
-            return re.sub(pattern, replacement, signed_url)
+            # Replace the internal B2 hostname with our Cloudflare domain
+            from urllib.parse import urlparse, urlunparse
+            parsed_signed = urlparse(signed_url)
+            # Replace the netloc (hostname) with our custom domain
+            new_parsed = parsed_signed._replace(netloc=self.custom_domain)
+            return urlunparse(new_parsed)
             
         return signed_url

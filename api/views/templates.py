@@ -35,7 +35,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(tool__id=tool_param)
         
         if self.action == 'list':
-            queryset = queryset.defer('svg', 'form_fields')
+            queryset = queryset.defer('svg', 'form_fields', 'svg_file')
         elif self.action == 'retrieve':
             queryset = queryset.defer('svg')
         
@@ -93,13 +93,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
         )
         return response
 
-    @action(detail=True, methods=['get'], url_path='svg')
-    @cache_template_svg()
-    def get_svg(self, request, pk=None):
-        template = self.get_object()
-        if template.svg_file:
-             return Response({"url": request.build_absolute_uri(template.svg_file.url), "svg": None}, status=status.HTTP_200_OK)
-        return Response({"svg": template.svg}, status=status.HTTP_200_OK)
+    # Removed get_svg action in favor of direct svg_url in serializer
 
 
 class AdminTemplateViewSet(viewsets.ModelViewSet):
@@ -130,13 +124,7 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
         
         return queryset.order_by('-created_at')
     
-    @action(detail=True, methods=['get'], url_path='svg')
-    @cache_template_svg()
-    def get_svg(self, request, pk=None):
-        template = Template.objects.get(pk=pk)
-        if template.svg_file:
-             return Response({"url": request.build_absolute_uri(template.svg_file.url), "svg": None}, status=status.HTTP_200_OK)
-        return Response({"svg": template.svg}, status=status.HTTP_200_OK)
+    # Removed get_svg action in favor of direct svg_url in serializer
     
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
