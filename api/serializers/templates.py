@@ -100,23 +100,11 @@ class TemplateSerializer(serializers.ModelSerializer):
         return instance
         
     def to_representation(self, instance):
-        # Get the base representation
         representation = super().to_representation(instance)
         view = self.context.get('view')
         
         if view and view.action == 'list':
-            # For list view: remove SVG and form_fields, keep banner
-            representation.pop('svg', None)
             representation.pop('form_fields', None)
-        elif view and view.action == 'retrieve':
-            # For detail view: provide SVG URL, keep form_fields
-            # User wants to fetch SVG from URL, so remove content
-            if instance.svg_file:
-                representation.pop('svg', None)
-        else:
-            # For other actions (create, update): include SVG if present
-            if 'svg' in representation and representation['svg']:
-                representation['svg'] = WaterMark().add_watermark(representation['svg'])
         
         return representation
 
@@ -134,6 +122,9 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
     svg_url = serializers.SerializerMethodField()
     banner = serializers.SerializerMethodField()
     tool_price = serializers.SerializerMethodField()
+    
+    # Temporary field for initial SVG ingestion or full overwrites
+    svg = serializers.CharField(write_only=True, required=False)
     
     # Use ListField for structured data. For FormData, this will need parsing in `update`.
     svg_patch = serializers.ListField(
@@ -162,8 +153,14 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         fonts_data = validated_data.pop('fonts', None)
+        svg_data = validated_data.pop('svg', None)
         validated_data.pop('svg_patch', None) # Don't use patch on create
-        template = Template.objects.create(**validated_data)
+        
+        template = Template(**validated_data)
+        if svg_data:
+            template._raw_svg_data = svg_data
+        template.save()
+
         if fonts_data:
             template.fonts.set(fonts_data)
         return template
@@ -173,11 +170,14 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
             validated_data.pop('form_fields', None)
         
         fonts_data = validated_data.pop('fonts', None)
+        svg_data = validated_data.pop('svg', None)
         
-        # --- SVG Patch Logic ---
+        if svg_data:
+            instance._raw_svg_data = svg_data
+        
+        # --- Figma-style Patch Logic ---
         svg_patch_data = validated_data.pop('svg_patch', None)
         
-        # Handle case where patch comes as a JSON string from FormData
         request = self.context.get('request')
         if not svg_patch_data and request and 'svg_patch' in request.data:
             try:
@@ -186,45 +186,16 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Invalid JSON format for svg_patch.")
 
         if svg_patch_data:
-            from ..svg_utils import apply_svg_patches, merge_svg_patches
-            print(f"[AdminTemplateSerializer] Processing {len(svg_patch_data)} patches using utility")
-            try:
-                # 1. Read existing SVG content
-                if not instance.svg_file:
-                    raise serializers.ValidationError("Cannot apply patch: No existing SVG file found.")
-                
-                if instance.svg:
-                    svg_content = instance.svg
-                else:
-                    instance.svg_file.open('r')
-                    svg_content = instance.svg_file.read()
-                    instance.svg_file.close()
+            from ..svg_utils import merge_svg_patches
+            # Merge new patches with existing ones in the database
+            existing_patches = instance.svg_patches or []
+            combined_patches = existing_patches + svg_patch_data
+            # Deduplicate/Merge to keep the instructions set minimal
+            instance.svg_patches = merge_svg_patches(combined_patches)
+            instance.save(update_fields=['svg_patches'])
+            print(f"[AdminTemplateSerializer] Figma-style patches merged. Total instructions: {len(instance.svg_patches)}")
 
-                if not svg_content:
-                    raise serializers.ValidationError("Cannot apply patch: Existing SVG content is empty.")
-
-                # 2. Apply patches using utility
-                svg_patch_data = merge_svg_patches(svg_patch_data)
-                new_svg_content = apply_svg_patches(svg_content, svg_patch_data)
-                
-                if new_svg_content != svg_content:
-                    # OPTIMIZATION: Save directly to file, NOT the DB text field
-                    from django.core.files.base import ContentFile
-                    filename = f"{instance.id}.svg"
-                    instance.svg_file.save(filename, ContentFile(new_svg_content.encode('utf-8')), save=False)
-                    
-                    # Clear the DB text field to save space
-                    validated_data['svg'] = ""
-                    instance.skip_svg_parse = True
-                    print(f"[AdminTemplateSerializer] SVG file updated directly. DB field cleared.")
-                else:
-                    print("[AdminTemplateSerializer] No changes detected after patching.")
-
-            except Exception as e:
-                raise serializers.ValidationError(f"Failed to apply SVG patch: {str(e)}")
-
-
-        # Continue with the normal update process for all other fields
+        # Continue with metadata updates
         instance = super().update(instance, validated_data)
         
         if fonts_data is not None:
@@ -236,14 +207,7 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         representation = super().to_representation(instance)
         view = self.context.get('view')
         
-        # In Admin context, we want to be more generous with data but avoid payload size issues
-        # We REMOVE 'svg' content and force frontend to fetch from URL for consistency with user side
-        if view:
-            representation.pop('svg', None)
-            if view.action == 'list':
-                representation.pop('form_fields', None)
-        
-        # Note: We keep 'svg' in the representation for 'retrieve', 'update', and 'partial_update'
-        # so the frontend doesn't have to wait for CDN/S3 propagation or deal with stale caches.
+        if view and view.action == 'list':
+            representation.pop('form_fields', None)
         
         return representation

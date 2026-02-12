@@ -1,26 +1,44 @@
-from django.db import models
-from django.core.files.base import ContentFile
 import uuid
 import logging
-from .tools import Tool
-from .fonts import Font
+from django.db import models
+from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
+from .svg_parser import parse_svg_to_form_fields
 
 logger = logging.getLogger(__name__)
+User = get_user_model()
 
-TEMPLATE_TYPE_CHOICES = [
-    ('social_media', 'Social Media'),
-    ('print', 'Print'),
-    ('web', 'Web'),
-    ('document', 'Document'),
-]
+class Tool(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=5.00)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name_plural = "Tools"
+        ordering = ['name']
+        indexes = [models.Index(fields=['is_active'])]
+    
+    def __str__(self):
+        return self.name
 
 class Template(models.Model):
+    TEMPLATE_TYPE_CHOICES = [
+        ('tool', 'Tool'),
+        ('design', 'Design'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
-    # The 'svg' field is now used only for initial uploads or small metadata.
-    # Large SVG data is stored exclusively in 'svg_file'.
-    svg = models.TextField(blank=True) 
-    svg_file = models.FileField(upload_to='templates/svgs/', blank=True, null=True, help_text="SVG file storage")
+    
+    # FIGMA-STYLE STORAGE
+    # No 'svg' text field (eliminates 20MB DB bloat).
+    # 'svg_file' is the base asset.
+    # 'svg_patches' stores all incremental edits.
+    svg_file = models.FileField(upload_to='templates/svgs/', blank=True, null=True, help_text="Base SVG file storage")
+    svg_patches = models.JSONField(default=list, blank=True, help_text="Incremental edits (Figma-style)")
 
     banner = models.ImageField(upload_to='template_banners/', blank=True, null=True)
     form_fields = models.JSONField(default=dict, blank=True)
@@ -34,31 +52,89 @@ class Template(models.Model):
     fonts = models.ManyToManyField('Font', blank=True, related_name='templates')
 
     def save(self, *args, **kwargs):
-        # Optimization: If raw SVG text is provided (e.g. from an upload or direct edit),
-        # convert it to a file and clear the text field to save DB space.
-        if self.svg and self.svg.strip().startswith('<svg'):
-            skip_parse = getattr(self, 'skip_svg_parse', False)
-            
-            # Extract form fields if requested
-            if not skip_parse:
-                try:
-                    from .svg_parser import parse_svg_to_form_fields
-                    self.form_fields = parse_svg_to_form_fields(self.svg)
-                except Exception as e:
-                    logger.error(f"Failed to parse SVG fields: {e}")
-
-            # Persist to file and clear text blob
+        # We handle initial ingestion if a raw SVG string is passed via a temporary attribute
+        raw_svg = getattr(self, '_raw_svg_data', None)
+        if raw_svg:
+            # 1. Parse fields
+            self.form_fields = parse_svg_to_form_fields(raw_svg)
+            # 2. Save as file
             filename = f"{self.id}.svg"
-            self.svg_file.save(filename, ContentFile(self.svg.encode('utf-8')), save=False)
-            self.svg = "" # CLEAR THE BLOB from DB
-
+            self.svg_file.save(filename, ContentFile(raw_svg.encode('utf-8')), save=False)
+            
         super().save(*args, **kwargs)
 
     @property
     def svg_url(self):
-        if self.svg_file:
-            return self.svg_file.url
-        return ""
+        return self.svg_file.url if self.svg_file else ""
 
     def __str__(self):
         return self.name
+
+class PurchasedTemplate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    buyer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="purchased_templates")
+    template = models.ForeignKey("Template", on_delete=models.SET_NULL, null=True, blank=True, related_name="purchases")
+    name = models.CharField(max_length=255, blank=True)
+    
+    # Also lean storage for purchases
+    svg_file = models.FileField(upload_to='purchased_templates/svgs/', blank=True, null=True)
+    form_fields = models.JSONField(default=dict, blank=True)
+    test = models.BooleanField(default=True)
+    tracking_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    keywords = models.JSONField(default=list, blank=True)
+    fonts = models.ManyToManyField('Font', blank=True, related_name='purchased_templates')
+
+    def __str__(self):
+        return f"{self.buyer.username} - {self.name}"
+
+class Tutorial(models.Model):
+    template = models.OneToOneField(Template, on_delete=models.CASCADE, related_name='tutorial')
+    url = models.URLField()
+    title = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class Font(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    family = models.CharField(max_length=255, blank=True)
+    weight = models.CharField(max_length=50, default="normal")
+    style = models.CharField(max_length=50, default="normal")
+    font_file = models.FileField(upload_to='fonts/')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+class SiteSettings(models.Model):
+    crypto_address = models.CharField(max_length=255, blank=True)
+    whatsapp_number = models.CharField(max_length=50, blank=True)
+    manual_purchase_text = models.TextField(blank=True)
+    dev_name_obfuscated = models.TextField(blank=True)
+    owner_name_obfuscated = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def get_settings(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+class TransformVariable(models.Model):
+    CATEGORY_CHOICES = [
+        ('rotate', 'Rotation'),
+        ('scale', 'Scale'),
+        ('translateX', 'Position X'),
+        ('translateY', 'Position Y'),
+    ]
+    name = models.CharField(max_length=100)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='rotate')
+    value = models.FloatField(default=0.0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['name', 'category']
