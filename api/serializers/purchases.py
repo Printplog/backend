@@ -3,6 +3,7 @@ from ..models import PurchasedTemplate, Template
 from .base import FieldUpdateSerializer, FontSerializer
 from ..svg_updater import update_svg_from_field_updates
 from api.watermark import WaterMark
+from api.utils import get_signed_url
 from decimal import Decimal
 
 class PurchasedTemplateSerializer(serializers.ModelSerializer):
@@ -116,7 +117,6 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         return banner_url
 
     def get_svg_url(self, obj):
-        request = self.context.get('request')
-        if obj.svg_file and request:
-            return request.build_absolute_uri(obj.svg_file.url)
-        return obj.svg_file.url if obj.svg_file else None
+        if obj.svg_file:
+            return get_signed_url(obj.svg_file)
+        return None

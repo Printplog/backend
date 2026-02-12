@@ -2,6 +2,7 @@ from rest_framework import serializers
 from ..models import Template, Font, Tutorial
 from .base import FontSerializer
 from api.watermark import WaterMark
+from api.utils import get_signed_url
 import os
 
 class TutorialSerializer(serializers.ModelSerializer):
@@ -33,10 +34,9 @@ class TemplateSerializer(serializers.ModelSerializer):
         fields = '__all__'
     
     def get_svg_url(self, obj):
-        request = self.context.get('request')
-        if obj.svg_file and request:
-            return request.build_absolute_uri(obj.svg_file.url)
-        return obj.svg_file.url if obj.svg_file else None
+        if obj.svg_file:
+            return get_signed_url(obj.svg_file)
+        return None
 
     def get_tool_price(self, obj):
         return obj.tool.price if obj.tool else None
@@ -141,10 +141,9 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'created_at', 'updated_at', 'form_fields')
 
     def get_svg_url(self, obj):
-        request = self.context.get('request')
-        if obj.svg_file and request:
-            return request.build_absolute_uri(obj.svg_file.url)
-        return obj.svg_file.url if obj.svg_file else None
+        if obj.svg_file:
+            return get_signed_url(obj.svg_file)
+        return None
     
     def get_tool_price(self, obj):
         return obj.tool.price if obj.tool else None
