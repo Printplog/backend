@@ -208,9 +208,15 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
                 new_svg_content = apply_svg_patches(svg_content, svg_patch_data)
                 
                 if new_svg_content != svg_content:
-                    validated_data['svg'] = new_svg_content
+                    # OPTIMIZATION: Save directly to file, NOT the DB text field
+                    from django.core.files.base import ContentFile
+                    filename = f"{instance.id}.svg"
+                    instance.svg_file.save(filename, ContentFile(new_svg_content.encode('utf-8')), save=False)
+                    
+                    # Clear the DB text field to save space
+                    validated_data['svg'] = ""
                     instance.skip_svg_parse = True
-                    print(f"[AdminTemplateSerializer] SVG patched successfully. Lines changed.")
+                    print(f"[AdminTemplateSerializer] SVG file updated directly. DB field cleared.")
                 else:
                     print("[AdminTemplateSerializer] No changes detected after patching.")
 
