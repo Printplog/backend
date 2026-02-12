@@ -102,11 +102,8 @@ class TemplateSerializer(serializers.ModelSerializer):
                 # Use request to build absolute URL
                 representation['banner'] = request.build_absolute_uri(representation['banner'])
             else:
-                # Fallback: check if we're in production
-                from django.conf import settings
-                if getattr(settings, 'ENV', 'development') == 'production':
-                    # Use production domain
-                    representation['banner'] = f"https://api.sharptoolz.com{representation['banner']}"
+                # Fallback: Just return the URL as is from the field
+                pass
         
         if view and view.action == 'list':
             # For list view: remove SVG and form_fields, keep banner
@@ -182,9 +179,7 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
             if request and hasattr(request, 'build_absolute_uri'):
                 representation['banner'] = request.build_absolute_uri(representation['banner'])
             else:
-                from django.conf import settings
-                if getattr(settings, 'ENV', 'development') == 'production':
-                    representation['banner'] = f"https://api.sharptoolz.com{representation['banner']}"
+                pass
         
         if view and view.action == 'list':
             representation.pop('svg', None)
