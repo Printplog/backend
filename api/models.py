@@ -59,24 +59,27 @@ class Template(models.Model):
         # Allow bypassing SVG parsing for admin edits (performance optimization)
         skip_parse = getattr(self, 'skip_svg_parse', False)
         
-        # Optimization: Only parse SVG if it has changed AND we're not skipping
-        should_parse = False
-        if self.svg and not skip_parse:
+        # Optimization: Only parse SVG if it has changed
+        svg_changed = False
+        if self.svg:
             if self.pk:
                 try:
                     old_instance = Template.objects.only('svg').get(pk=self.pk)
                     if old_instance.svg != self.svg:
-                        should_parse = True
+                        svg_changed = True
                 except Template.DoesNotExist:
-                    should_parse = True
+                    svg_changed = True
             else:
-                should_parse = True
+                svg_changed = True
 
-        if should_parse and self.svg:
-            # Parse SVG to generate form fields
-            self.form_fields = parse_svg_to_form_fields(self.svg)
+        if svg_changed and self.svg:
+            skip_parse = getattr(self, 'skip_svg_parse', False)
             
-            # Save SVG to file
+            # Parse SVG only if not skipped
+            if not skip_parse:
+                self.form_fields = parse_svg_to_form_fields(self.svg)
+            
+            # ALWAYS save SVG to file if changed
             filename = f"{self.id}.svg"
             self.svg_file.save(filename, ContentFile(self.svg.encode('utf-8')), save=False)
 
@@ -142,23 +145,26 @@ class PurchasedTemplate(models.Model):
                 self.name = f"Orphaned Template #{count}"
 
         # Optimization: Only parse SVG if it has changed
-        should_parse = False
+        svg_changed = False
         if self.svg:
             if self.pk:
                 try:
                     old_instance = PurchasedTemplate.objects.only('svg').get(pk=self.pk)
                     if old_instance.svg != self.svg:
-                        should_parse = True
+                        svg_changed = True
                 except PurchasedTemplate.DoesNotExist:
-                    should_parse = True
+                    svg_changed = True
             else:
-                should_parse = True
+                svg_changed = True
 
-        if should_parse and self.svg:
-            # Always parse SVG to generate form fields from the latest SVG content
-            self.form_fields = parse_svg_to_form_fields(self.svg)
+        if svg_changed and self.svg:
+            skip_parse = getattr(self, 'skip_svg_parse', False)
             
-            # Save SVG to file
+            # Parse SVG to generate form fields only if not skipped
+            if not skip_parse:
+                self.form_fields = parse_svg_to_form_fields(self.svg)
+            
+            # ALWAYS save SVG to file if it changed, regardless of parsing
             filename = f"{self.id}.svg"
             self.svg_file.save(filename, ContentFile(self.svg.encode('utf-8')), save=False)
 

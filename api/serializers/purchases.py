@@ -51,7 +51,12 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
             form_fields = instance.form_fields or []
             updated_svg, updated_fields = update_svg_from_field_updates(base_svg, form_fields, field_updates)
             validated_data["svg"] = updated_svg
-            validated_data.pop("form_fields", None)
+            
+            # Use the already calculated form fields instead of re-parsing
+            validated_data["form_fields"] = updated_fields
+            
+            # Mark instance to skip redundant parsing in save()
+            instance.skip_svg_parse = True
         self.charge_if_test_false(instance, validated_data, is_update=True)
         return super().update(instance, validated_data)
 
@@ -68,11 +73,39 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
             form_fields = template.form_fields or []
             updated_svg, updated_fields = update_svg_from_field_updates(base_svg, form_fields, field_updates)
             validated_data["svg"] = updated_svg
-            validated_data.pop("form_fields", None)
+            
+            # Use calculated fields and skip parse
+            validated_data["form_fields"] = updated_fields
+            # We can't set instance attribute here since instance doesn't exist yet
+            # But create() calls save() on the instance after instantiation
+            # So we'll handle this by modifying the instance before save
         elif template and "svg" not in validated_data:
             template = Template.objects.only('svg').get(pk=template.pk)
             validated_data["svg"] = template.svg
         
+        # If field updates provided, use already parsed form_fields
+        if field_updates and "form_fields" in validated_data:
+            validated_data_for_create = validated_data.copy()
+            validated_data_for_create.pop('fonts', None)
+            
+            instance = self.Meta.model(**validated_data_for_create)
+            
+            # This instance should skip redundant SVG parsing
+            instance.skip_svg_parse = True
+            
+            # Handle payment and watermark removal if needed
+            # This may modify validated_data['svg']
+            self.charge_if_test_false(instance, validated_data, is_update=False)
+            
+            # Sync SVG back to instance if modified by charge logic (e.g. watermark removal)
+            if validated_data.get('svg') and validated_data.get('svg') != instance.svg:
+                instance.svg = validated_data.get('svg')
+            
+            # Use save() directly
+            instance.save()
+            return instance
+            
+        # Fallback to standard creation if no optimization possible
         temp_instance = self.Meta.model(**validated_data)
         self.charge_if_test_false(temp_instance, validated_data, is_update=False)
         

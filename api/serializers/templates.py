@@ -161,9 +161,6 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         
         fonts_data = validated_data.pop('fonts', None)
         
-        if 'svg' in validated_data:
-            instance.skip_svg_parse = True
-        
         instance = super().update(instance, validated_data)
         
         if fonts_data is not None:
