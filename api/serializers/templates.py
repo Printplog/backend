@@ -111,7 +111,9 @@ class TemplateSerializer(serializers.ModelSerializer):
             representation.pop('form_fields', None)
         elif view and view.action == 'retrieve':
             # For detail view: provide SVG URL, keep form_fields
-            representation.pop('svg', None)
+            # User wants to fetch SVG from URL, so remove content
+            if instance.svg_file:
+                representation.pop('svg', None)
         else:
             # For other actions (create, update): include SVG if present
             if 'svg' in representation and representation['svg']:

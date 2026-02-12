@@ -10,6 +10,7 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
     fonts = FontSerializer(many=True, read_only=True)
     banner = serializers.SerializerMethodField()
     tool_price = serializers.SerializerMethodField()
+    svg_url = serializers.SerializerMethodField()
     
     class Meta:
         model = PurchasedTemplate
@@ -88,7 +89,10 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
             representation.pop('form_fields', None)
             representation.pop('svg', None)
         elif view and view.action == 'retrieve':
-            representation.pop('svg', None)
+            # User-side needs raw SVG to avoid CORS issues with CDN
+            # So we do NOT pop 'svg' here anymore
+            if instance.svg_file:
+                representation.pop('svg', None)
         else:
             if instance.test and 'svg' in representation and representation['svg']:
                 representation['svg'] = WaterMark().add_watermark(representation['svg'])
@@ -110,3 +114,9 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'build_absolute_uri'):
             return request.build_absolute_uri(banner_url)
         return banner_url
+
+    def get_svg_url(self, obj):
+        request = self.context.get('request')
+        if obj.svg_file and request:
+            return request.build_absolute_uri(obj.svg_file.url)
+        return obj.svg_file.url if obj.svg_file else None
