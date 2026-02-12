@@ -186,7 +186,10 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
             representation.pop('svg', None)
             representation.pop('form_fields', None)
         elif view and view.action == 'retrieve':
-            pass
+            # For detail view: provide SVG URL, keep form_fields
+            # Frontend wants to fetch SVG from URL for better loading speed
+            if instance.svg_file:
+                representation.pop('svg', None)
         else:
             pass
         
