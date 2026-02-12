@@ -230,10 +230,12 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         representation = super().to_representation(instance)
         view = self.context.get('view')
         
-        # In Admin context, we want to be more generous with data to avoid caching issues
-        if view and view.action == 'list':
+        # In Admin context, we want to be more generous with data but avoid payload size issues
+        # We REMOVE 'svg' content and force frontend to fetch from URL for consistency with user side
+        if view:
             representation.pop('svg', None)
-            representation.pop('form_fields', None)
+            if view.action == 'list':
+                representation.pop('form_fields', None)
         
         # Note: We keep 'svg' in the representation for 'retrieve', 'update', and 'partial_update'
         # so the frontend doesn't have to wait for CDN/S3 propagation or deal with stale caches.
