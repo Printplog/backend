@@ -30,6 +30,7 @@ class TemplateSerializer(serializers.ModelSerializer):
         required=False
     )
     svg_url = serializers.SerializerMethodField()
+    banner = serializers.SerializerMethodField()
     tool_price = serializers.SerializerMethodField()
     
     class Meta:
@@ -39,6 +40,11 @@ class TemplateSerializer(serializers.ModelSerializer):
     def get_svg_url(self, obj):
         if obj.svg_file:
             return get_signed_url(obj.svg_file)
+        return None
+
+    def get_banner(self, obj):
+        if obj.banner:
+            return get_signed_url(obj.banner)
         return None
 
     def get_tool_price(self, obj):
@@ -96,17 +102,7 @@ class TemplateSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         # Get the base representation
         representation = super().to_representation(instance)
-        request = self.context.get('request')
         view = self.context.get('view')
-        
-        # Handle banner URL for production
-        if 'banner' in representation and representation['banner']:
-            if request and hasattr(request, 'build_absolute_uri'):
-                # Use request to build absolute URL
-                representation['banner'] = request.build_absolute_uri(representation['banner'])
-            else:
-                # Fallback: Just return the URL as is from the field
-                pass
         
         if view and view.action == 'list':
             # For list view: remove SVG and form_fields, keep banner
@@ -136,6 +132,7 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         required=False
     )
     svg_url = serializers.SerializerMethodField()
+    banner = serializers.SerializerMethodField()
     tool_price = serializers.SerializerMethodField()
     
     # Use ListField for structured data. For FormData, this will need parsing in `update`.
@@ -153,6 +150,11 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
     def get_svg_url(self, obj):
         if obj.svg_file:
             return get_signed_url(obj.svg_file)
+        return None
+
+    def get_banner(self, obj):
+        if obj.banner:
+            return get_signed_url(obj.banner)
         return None
     
     def get_tool_price(self, obj):
@@ -252,14 +254,7 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
     
     def to_representation(self, instance):
         representation = super().to_representation(instance)
-        request = self.context.get('request')
         view = self.context.get('view')
-        
-        if 'banner' in representation and representation['banner']:
-            if request and hasattr(request, 'build_absolute_uri'):
-                representation['banner'] = request.build_absolute_uri(representation['banner'])
-            else:
-                pass
         
         if view and view.action == 'list':
             representation.pop('svg', None)

@@ -141,13 +141,9 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
 
     def get_banner(self, obj):
         template = obj.template
-        if not template or not template.banner:
-            return None
-        request = self.context.get('request')
-        banner_url = template.banner.url
-        if request and hasattr(request, 'build_absolute_uri'):
-            return request.build_absolute_uri(banner_url)
-        return banner_url
+        if template and template.banner:
+            return get_signed_url(template.banner)
+        return None
 
     def get_svg_url(self, obj):
         if obj.svg_file:

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from ..models import Tool, Font, TransformVariable, SiteSettings
+from api.utils import get_signed_url
 
 class FieldUpdateSerializer(serializers.Serializer):
     id = serializers.CharField()
@@ -27,11 +28,10 @@ class FontSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
     
     def get_font_url(self, obj):
-        """Return absolute URL for font file"""
-        request = self.context.get('request')
-        if obj.font_file and request:
-            return request.build_absolute_uri(obj.font_file.url)
-        return obj.font_file.url if obj.font_file else None
+        """Return signed URL for the font file."""
+        if obj.font_file:
+            return get_signed_url(obj.font_file)
+        return None
 
 
 class SiteSettingsSerializer(serializers.ModelSerializer):
