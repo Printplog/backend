@@ -176,7 +176,9 @@ STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Media files (User uploaded content)
-if ENV == "production":
+USE_S3_STORAGE = os.getenv('USE_S3_STORAGE', 'False').lower() == 'true'
+
+if ENV == "production" or USE_S3_STORAGE:
     # Backblaze B2 S3 Compatible Storage Settings
     AWS_ACCESS_KEY_ID = os.getenv('BACKBLAZE_B2_KEY_ID')
     AWS_SECRET_ACCESS_KEY = os.getenv('BACKBLAZE_B2_APPLICATION_KEY')
@@ -193,10 +195,11 @@ if ENV == "production":
     AWS_S3_FILE_OVERWRITE = False
     
     # Cloudflare CDN Configuration
-    AWS_S3_CUSTOM_DOMAIN = os.getenv('CLOUDFLARE_CDN_DOMAIN') # e.g. cdn.sharptoolz.com/sharptoolz
+    BACKBLAZE_B2_CUSTOM_DOMAIN = os.getenv('BACKBLAZE_B2_CUSTOM_DOMAIN')
     
-    if AWS_S3_CUSTOM_DOMAIN:
-        MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/'
+    if BACKBLAZE_B2_CUSTOM_DOMAIN:
+        MEDIA_URL = f'https://{BACKBLAZE_B2_CUSTOM_DOMAIN}/'
+        AWS_S3_CUSTOM_DOMAIN = BACKBLAZE_B2_CUSTOM_DOMAIN
     else:
         MEDIA_URL = f'{AWS_S3_ENDPOINT_URL}/{AWS_STORAGE_BUCKET_NAME}/'
     
@@ -219,7 +222,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # Django 4.2+ Storages configuration
 STORAGES = {
     "default": {
-        "BACKEND": "api.storage_backends.MediaStorage" if ENV == "production" else "django.core.files.storage.FileSystemStorage",
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage" if (ENV == "production" or USE_S3_STORAGE) else "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
