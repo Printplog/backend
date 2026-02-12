@@ -76,7 +76,12 @@ class PurchasedTemplate(models.Model):
     template = models.ForeignKey("Template", on_delete=models.SET_NULL, null=True, blank=True, related_name="purchases")
     name = models.CharField(max_length=255, blank=True)
     
-    # Also lean storage for purchases
+    # FIGMA-STYLE STORAGE FOR PURCHASES
+    # Users store their custom edits as patches too.
+    svg_patches = models.JSONField(default=list, blank=True, help_text="Incremental edits made by the user")
+    
+    # We keep svg_file only as a fallback for bespoke uploads, 
+    # but for template purchases, we use the template's base file.
     svg_file = models.FileField(upload_to='purchased_templates/svgs/', blank=True, null=True)
     form_fields = models.JSONField(default=dict, blank=True)
     test = models.BooleanField(default=True)
@@ -85,6 +90,30 @@ class PurchasedTemplate(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     keywords = models.JSONField(default=list, blank=True)
     fonts = models.ManyToManyField('Font', blank=True, related_name='purchased_templates')
+
+    def save(self, *args, **kwargs):
+        # 1. Handle initial SVG ingestion for purchases (e.g. from a tool output)
+        raw_svg = getattr(self, '_raw_svg_data', None)
+        if raw_svg:
+            # Save as file and clear text blob
+            filename = f"{self.id}.svg"
+            self.svg_file.save(filename, ContentFile(raw_svg.encode('utf-8')), save=False)
+            # No text stored in DB
+        
+        # 2. On first save, if based on a template, inherit metadata
+        if not self.pk and self.template:
+            if not self.svg_patches:
+                self.svg_patches = list(self.template.svg_patches)
+            if not self.form_fields:
+                self.form_fields = dict(self.template.form_fields)
+            if not self.keywords:
+                self.keywords = list(self.template.keywords)
+        
+        super().save(*args, **kwargs)
+
+        # 3. Handle font inheritance
+        if self.template and self.template.fonts.exists() and not self.fonts.exists():
+             self.fonts.set(self.template.fonts.all())
 
     def __str__(self):
         return f"{self.buyer.username} - {self.name}"
