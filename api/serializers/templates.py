@@ -186,61 +186,35 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Invalid JSON format for svg_patch.")
 
         if svg_patch_data:
+            from ..svg_utils import apply_svg_patches, merge_svg_patches
+            print(f"[AdminTemplateSerializer] Processing {len(svg_patch_data)} patches using utility")
             try:
                 # 1. Read existing SVG content
-                if not instance.svg:
-                    raise serializers.ValidationError("Cannot apply patch: No existing SVG found.")
+                if not instance.svg_file:
+                    raise serializers.ValidationError("Cannot apply patch: No existing SVG file found.")
                 
-                instance.svg.open('r')
-                svg_content = instance.svg.read()
-                instance.svg.close()
+                if instance.svg:
+                    svg_content = instance.svg
+                else:
+                    instance.svg_file.open('r')
+                    svg_content = instance.svg_file.read()
+                    instance.svg_file.close()
 
                 if not svg_content:
-                    raise serializers.ValidationError("Cannot apply patch: Existing SVG is empty.")
+                    raise serializers.ValidationError("Cannot apply patch: Existing SVG content is empty.")
 
-                # 2. Parse SVG using lxml
-                parser = etree.XMLParser(recover=True, remove_blank_text=True)
-                svg_tree = etree.fromstring(svg_content.encode('utf-8'), parser=parser)
+                # 2. Apply patches using utility
+                svg_patch_data = merge_svg_patches(svg_patch_data)
+                new_svg_content = apply_svg_patches(svg_content, svg_patch_data)
                 
-                # Register namespaces to find elements correctly
-                namespaces = {k if k is not None else 'svg': v for k, v in svg_tree.nsmap.items()}
-                if 'svg' not in namespaces:
-                    namespaces['svg'] = 'http://www.w3.org/2000/svg'
+                if new_svg_content != svg_content:
+                    validated_data['svg'] = new_svg_content
+                    instance.skip_svg_parse = True
+                    print(f"[AdminTemplateSerializer] SVG patched successfully. Lines changed.")
+                else:
+                    print("[AdminTemplateSerializer] No changes detected after patching.")
 
-                # 3. Apply patches
-                for patch in svg_patch_data:
-                    element_id = patch.get('id')
-                    attribute = patch.get('attribute')
-                    value = patch.get('value')
-                    
-                    if not all([element_id, attribute]):
-                        continue
-
-                    # Find element by ID. The `.` ensures it searches the whole tree from the current node.
-                    elements = svg_tree.findall(f".//*[@id='{element_id}']", namespaces=namespaces)
-                    
-                    for element in elements:
-                        if attribute == 'innerText':
-                            element.text = str(value)
-                        else:
-                            # Handle namespaced attributes like xlink:href
-                            attr_parts = attribute.split(':')
-                            if len(attr_parts) == 2 and attr_parts[0] in namespaces:
-                                ns_key = namespaces[attr_parts[0]]
-                                element.set(f"{{{ns_key}}}{attr_parts[1]}", str(value))
-                            else:
-                                element.set(attribute, str(value))
-                
-                # 4. Serialize back to string
-                new_svg_content = etree.tostring(svg_tree, pretty_print=True).decode('utf-8')
-                
-                # 5. Overwrite the existing file content
-                validated_data['svg'] = ContentFile(new_svg_content.encode('utf-8'), name=os.path.basename(instance.svg.name))
-
-            except json.JSONDecodeError:
-                raise serializers.ValidationError("Invalid JSON in svg_patch.")
             except Exception as e:
-                # Use logging in a real app: logging.error(f"SVG Patch failed: {e}")
                 raise serializers.ValidationError(f"Failed to apply SVG patch: {str(e)}")
 
 
@@ -256,15 +230,12 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         representation = super().to_representation(instance)
         view = self.context.get('view')
         
+        # In Admin context, we want to be more generous with data to avoid caching issues
         if view and view.action == 'list':
             representation.pop('svg', None)
             representation.pop('form_fields', None)
-        elif view and view.action == 'retrieve':
-            # For detail view: provide SVG URL, keep form_fields
-            # Frontend wants to fetch SVG from URL for better loading speed
-            if instance.svg_file:
-                representation.pop('svg', None)
-        else:
-            pass
+        
+        # Note: We keep 'svg' in the representation for 'retrieve', 'update', and 'partial_update'
+        # so the frontend doesn't have to wait for CDN/S3 propagation or deal with stale caches.
         
         return representation

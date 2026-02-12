@@ -118,9 +118,8 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(tool__id=tool_param)
         
         if self.action == 'list':
-            queryset = queryset.defer('svg', 'form_fields')
-        elif self.action == 'retrieve':
-            queryset = queryset.defer('svg')
+            # Only defer in list view to keep the response small
+            queryset = queryset.defer('svg', 'form_fields', 'svg_file')
         
         return queryset.order_by('-created_at')
     

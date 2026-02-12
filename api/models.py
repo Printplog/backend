@@ -74,14 +74,18 @@ class Template(models.Model):
 
         if svg_changed and self.svg:
             skip_parse = getattr(self, 'skip_svg_parse', False)
+            print(f"[Template.save] SVG changed. skip_parse={skip_parse}")
             
             # Parse SVG only if not skipped
             if not skip_parse:
+                print("[Template.save] Parsing SVG to form fields...")
                 self.form_fields = parse_svg_to_form_fields(self.svg)
             
             # ALWAYS save SVG to file if changed
             filename = f"{self.id}.svg"
+            print(f"[Template.save] Saving SVG to storage as {filename}")
             self.svg_file.save(filename, ContentFile(self.svg.encode('utf-8')), save=False)
+            print(f"[Template.save] SVG saved. Current svg_file: {self.svg_file.name}")
 
         # Ensure keywords is always a list
         if not isinstance(self.keywords, list):
