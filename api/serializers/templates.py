@@ -209,7 +209,7 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
                     if p_id and p_attr == 'innerText':
                         for field in updated_fields:
                             if field.get('id') == p_id:
-                                field['value'] = p_val # Update default value
+                                field['defaultValue'] = p_val # Update default value
                                 modified = True
                 
                 if modified:
