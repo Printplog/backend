@@ -35,9 +35,9 @@ class TemplateViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(tool__id=tool_param)
         
         if self.action == 'list':
-            queryset = queryset.defer('svg', 'form_fields', 'svg_file')
+            queryset = queryset.defer('form_fields', 'svg_file')
         elif self.action == 'retrieve':
-            queryset = queryset.defer('svg')
+            pass
         
         return queryset.order_by('-created_at')
 
@@ -119,7 +119,7 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
         
         if self.action == 'list':
             # Only defer in list view to keep the response small
-            queryset = queryset.defer('svg', 'form_fields', 'svg_file')
+            queryset = queryset.defer('form_fields', 'svg_file')
         
         return queryset.order_by('-created_at')
     
@@ -142,6 +142,20 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
         response = super().destroy(request, *args, **kwargs)
         invalidate_template_cache(template_id=template_id)
         return response
+
+    @action(detail=True, methods=['post'], url_path='reparse')
+    def reparse(self, request, pk=None):
+        """Manually force re-parsing of the template SVG to update form_fields."""
+        template = self.get_object()
+        
+        # Trigger the manual re-parse logic in model.save()
+        template._force_reparse = True
+        template.save()
+        
+        # Invalidate cache
+        invalidate_template_cache(template_id=template.id)
+        
+        return Response({'status': 'success', 'message': 'Template re-parsed and form fields synced.'})
 
 
 from rest_framework.views import APIView

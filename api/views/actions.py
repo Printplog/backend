@@ -64,33 +64,59 @@ class DownloadDoc(APIView):
             return Response({"error": "purchased_template_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            # FIGMA-STYLE Reconstruction
+            # We load the base asset, apply patches, then apply user inputs.
             purchased_template = PurchasedTemplate.objects.select_related('template').prefetch_related(
                 'template__fonts'
             ).only(
-                'svg', 'svg_file', 'test', 'name', 'keywords', 
+                'svg_file', 'svg_patches', 'form_fields', 'test', 'name', 'keywords', 
                 'template__id', 'template__keywords'
             ).get(id=purchased_template_id, buyer=request.user)
             
+            # 1. Load Base Content (Fallback to template if purchase file is missing)
+            svg_content = ""
             if purchased_template.svg_file:
                 with purchased_template.svg_file.open('rb') as f:
                     svg_content = f.read().decode('utf-8')
-            else:
-                svg_content = purchased_template.svg
+            elif purchased_template.template and purchased_template.template.svg_file:
+                 with purchased_template.template.svg_file.open('rb') as f:
+                    svg_content = f.read().decode('utf-8')
+
+            if not svg_content:
+                raise Exception("Base SVG content not found.")
+
+            # 2. Apply saved patches (Figma-style layout edits)
+            if purchased_template.svg_patches:
+                from ..svg_utils import apply_svg_patches
+                print(f"[DownloadDoc] Applying {len(purchased_template.svg_patches)} layout patches")
+                svg_content = apply_svg_patches(svg_content, purchased_template.svg_patches)
+
+            # 3. Apply user form data (Text/Form values)
+            if purchased_template.form_fields:
+                print(f"[DownloadDoc] Applying form field data")
+                # Convert form_fields into FieldUpdates list
+                field_updates = []
+                for field in purchased_template.form_fields:
+                    if 'currentValue' in field:
+                         field_updates.append({'id': field['id'], 'value': field['currentValue']})
+                
+                if field_updates:
+                    from ..svg_updater import update_svg_from_field_updates
+                    svg_content, _ = update_svg_from_field_updates(svg_content, purchased_template.form_fields, field_updates)
+
             if not template_name:
                 template_name = purchased_template.name or ""
+
         except PurchasedTemplate.DoesNotExist:
             print(f"ERROR: Purchased template not found. ID: {purchased_template_id}, User: {request.user.username}")
-            # Ownership Audit (Debug only)
-            exists_anywhere = PurchasedTemplate.objects.filter(id=purchased_template_id).first()
-            if exists_anywhere:
-                print(f"DEBUG: Document {purchased_template_id} EXISTS but belongs to {exists_anywhere.buyer.username}, not {request.user.username}")
-            else:
-                print(f"DEBUG: Document {purchased_template_id} DOES NOT EXIST in database at all.")
             return Response({"error": "Purchased template not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            print(f"ERROR: Failed to reconstruct SVG: {str(e)}")
+            return Response({"error": f"Document construction failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         if not svg_content or "</svg>" not in svg_content:
-            print(f"ERROR: Invalid or missing SVG content for ID: {purchased_template_id}")
-            return Response({"error": "Invalid or missing SVG content"}, status=status.HTTP_400_BAD_REQUEST)
+            print(f"ERROR: Invalid or missing SVG content reconstruction for ID: {purchased_template_id}")
+            return Response({"error": "Failed to assemble document components"}, status=status.HTTP_400_BAD_REQUEST)
 
         if output_type not in ("pdf", "png"):
             print(f"ERROR: Unsupported output type: {output_type} for ID: {purchased_template_id}")
@@ -125,39 +151,37 @@ class DownloadDoc(APIView):
                         safe_name = re.sub(r'[^\w\s-]', '', purchased_template.name).strip()
                         safe_name = re.sub(r'[-\s]+', '-', safe_name) if safe_name else ""
             
+            # 4. Inject fonts if available
             print(f"Checking for fonts to inject for ID: {purchased_template_id}...")
             fonts_to_inject = []
             if purchased_template and purchased_template.template:
                 fonts_to_inject = list(purchased_template.template.fonts.all())
                 print(f"Found {len(fonts_to_inject)} font(s) to inject")
             
-            has_fonts = bool(fonts_to_inject)
-            print(f"Has fonts: {has_fonts}")
-            
-            if has_fonts:
+            if fonts_to_inject:
+                from ..font_injector import inject_fonts_into_svg
                 print("Injecting fonts into SVG...")
-                svg_with_fonts = inject_fonts_into_svg(svg_content, fonts_to_inject, embed_base64=True)
-                
-                if output_type == "pdf":
-                    if PLAYWRIGHT_AVAILABLE:
-                        print("Using Playwright for PDF rendering...")
-                        output = render_svg_with_playwright(svg_with_fonts, "pdf")
-                    else:
-                        print("Using CairoSVG for PDF rendering (Playwright not available)...")
-                        output = cairosvg.svg2pdf(bytestring=svg_content.encode("utf-8"))
-                else:  # PNG
-                    if PLAYWRIGHT_AVAILABLE:
-                        print("Using Playwright for PNG rendering...")
-                        output = render_svg_with_playwright(svg_with_fonts, "png")
-                    else:
-                        print("Using CairoSVG for PNG rendering (Playwright not available)...")
-                        output = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
-            else:
-                if output_type == "pdf":
-                    print("Using CairoSVG for PDF rendering (no fonts)...")
+                svg_content = inject_fonts_into_svg(svg_content, fonts_to_inject, embed_base64=True)
+
+            # 5. Add Watermark if this is a test document
+            if purchased_template.test:
+                from ..watermark import WaterMark
+                print("[DownloadDoc] Adding test watermarks")
+                svg_content = WaterMark().add_watermark(svg_content)
+
+            if output_type == "pdf":
+                if PLAYWRIGHT_AVAILABLE:
+                    print("Using Playwright for PDF rendering...")
+                    output = render_svg_with_playwright(svg_content, "pdf")
+                else:
+                    print("Using CairoSVG for PDF rendering (Playwright not available)...")
                     output = cairosvg.svg2pdf(bytestring=svg_content.encode("utf-8"))
-                else:  # PNG
-                    print("Using CairoSVG for PNG rendering (no fonts)...")
+            else:  # PNG
+                if PLAYWRIGHT_AVAILABLE:
+                    print("Using Playwright for PNG rendering...")
+                    output = render_svg_with_playwright(svg_content, "png")
+                else:
+                    print("Using CairoSVG for PNG rendering (Playwright not available)...")
                     output = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
             
             if output_type == "pdf":

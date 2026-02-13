@@ -41,7 +41,7 @@ class Template(models.Model):
     svg_patches = models.JSONField(default=list, blank=True, help_text="Incremental edits (Figma-style)")
 
     banner = models.ImageField(upload_to='template_banners/', blank=True, null=True)
-    form_fields = models.JSONField(default=dict, blank=True)
+    form_fields = models.JSONField(default=list, blank=True)
     type = models.CharField(max_length=20, choices=TEMPLATE_TYPE_CHOICES)
     tool = models.ForeignKey(Tool, on_delete=models.SET_NULL, null=True, blank=True, related_name='templates')
     is_active = models.BooleanField(default=True)
@@ -52,15 +52,35 @@ class Template(models.Model):
     fonts = models.ManyToManyField('Font', blank=True, related_name='templates')
 
     def save(self, *args, **kwargs):
-        # We handle initial ingestion if a raw SVG string is passed via a temporary attribute
+        # 1. Handle initial ingestion or full overwrite
         raw_svg = getattr(self, '_raw_svg_data', None)
         if raw_svg:
-            # 1. Parse fields
             self.form_fields = parse_svg_to_form_fields(raw_svg)
-            # 2. Save as file
             filename = f"{self.id}.svg"
             self.svg_file.save(filename, ContentFile(raw_svg.encode('utf-8')), save=False)
-            
+        
+    def save(self, *args, **kwargs):
+        # 1. Handle initial ingestion or full overwrite
+        raw_svg = getattr(self, '_raw_svg_data', None)
+        if raw_svg:
+            self.form_fields = parse_svg_to_form_fields(raw_svg)
+            filename = f"{self.id}.svg"
+            self.svg_file.save(filename, ContentFile(raw_svg.encode('utf-8')), save=False)
+        
+        # 2. TRIGGER RE-PARSING ONLY IF FORCED (Manual Admin Button)
+        # We no longer auto-reparse on patches to ensure maximum speed.
+        elif self.pk and self.svg_file and getattr(self, '_force_reparse', False):
+            try:
+                with self.svg_file.open('rb') as f:
+                    base_svg = f.read().decode('utf-8')
+                
+                from .svg_utils import apply_svg_patches
+                reconstructed_svg = apply_svg_patches(base_svg, self.svg_patches or [])
+                self.form_fields = parse_svg_to_form_fields(reconstructed_svg)
+                print(f"[Template.save] Manual structural re-parse complete.")
+            except Exception as e:
+                print(f"[Template.save] Reparse skipped/failed: {e}")
+
         super().save(*args, **kwargs)
 
     @property
@@ -83,7 +103,7 @@ class PurchasedTemplate(models.Model):
     # We keep svg_file only as a fallback for bespoke uploads, 
     # but for template purchases, we use the template's base file.
     svg_file = models.FileField(upload_to='purchased_templates/svgs/', blank=True, null=True)
-    form_fields = models.JSONField(default=dict, blank=True)
+    form_fields = models.JSONField(default=list, blank=True)
     test = models.BooleanField(default=True)
     tracking_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -92,26 +112,50 @@ class PurchasedTemplate(models.Model):
     fonts = models.ManyToManyField('Font', blank=True, related_name='purchased_templates')
 
     def save(self, *args, **kwargs):
-        # 1. Handle initial SVG ingestion for purchases (e.g. from a tool output)
+        # 1. Handle initial SVG ingestion for purchases (bespoke uploads)
         raw_svg = getattr(self, '_raw_svg_data', None)
         if raw_svg:
-            # Save as file and clear text blob
             filename = f"{self.id}.svg"
             self.svg_file.save(filename, ContentFile(raw_svg.encode('utf-8')), save=False)
-            # No text stored in DB
         
-        # 2. On first save, if based on a template, inherit metadata
+        # 2. Inherit basic meta on first save
         if not self.pk and self.template:
             if not self.svg_patches:
                 self.svg_patches = list(self.template.svg_patches)
             if not self.form_fields:
-                self.form_fields = dict(self.template.form_fields)
+                self.form_fields = list(self.template.form_fields)
             if not self.keywords:
                 self.keywords = list(self.template.keywords)
-        
+
+        # 3. FIGMA-STYLE STRUCTURE SYNC:
+        # We ONLY re-parse if explicitly forced.
+        if getattr(self, '_force_reparse', False) and not raw_svg:
+            svg_source = self.svg_file if self.svg_file else (self.template.svg_file if self.template else None)
+            
+            if svg_source:
+                try:
+                    with svg_source.open('rb') as f:
+                        base_svg = f.read().decode('utf-8')
+                    
+                    from .svg_utils import apply_svg_patches
+                    reconstructed_svg = apply_svg_patches(base_svg, self.svg_patches or [])
+                    
+                    new_structure = parse_svg_to_form_fields(reconstructed_svg)
+                    current_values = {f['id']: f.get('currentValue') for f in (self.form_fields or []) if 'id' in f}
+                    
+                    for field in new_structure:
+                        fid = field.get('id')
+                        if fid in current_values:
+                            field['currentValue'] = current_values[fid]
+                    
+                    self.form_fields = new_structure
+                    print(f"[PurchasedTemplate.save] Manual re-parse complete.")
+                except Exception as e:
+                    print(f"[PurchasedTemplate.save] Reparse skipped: {e}")
+
         super().save(*args, **kwargs)
 
-        # 3. Handle font inheritance
+        # 4. Handle font inheritance (post-save for M2M)
         if self.template and self.template.fonts.exists() and not self.fonts.exists():
              self.fonts.set(self.template.fonts.all())
 

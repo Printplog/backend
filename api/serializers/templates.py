@@ -192,6 +192,30 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
             combined_patches = existing_patches + svg_patch_data
             # Deduplicate/Merge to keep the instructions set minimal
             instance.svg_patches = merge_svg_patches(combined_patches)
+            
+            # FAST SYNC: Update form_fields JSON directly for known patch types (like text renaming)
+            # This avoids expensive file re-parsing.
+            if instance.form_fields:
+                updated_fields = list(instance.form_fields)
+                modified = False
+                for patch in svg_patch_data:
+                    # If we renamed a text field (innerText), we might want to update its label or value in form_fields?
+                    # Actually, innerText patches usually mean the content CHANGED.
+                    # If the ID matches a form field, let's update its default value.
+                    p_id = patch.get('id')
+                    p_attr = patch.get('attribute')
+                    p_val = patch.get('value')
+                    
+                    if p_id and p_attr == 'innerText':
+                        for field in updated_fields:
+                            if field.get('id') == p_id:
+                                field['value'] = p_val # Update default value
+                                modified = True
+                
+                if modified:
+                    instance.form_fields = updated_fields
+                    instance.save(update_fields=['form_fields'])
+
             instance.save(update_fields=['svg_patches'])
             print(f"[AdminTemplateSerializer] Figma-style patches merged. Total instructions: {len(instance.svg_patches)}")
 

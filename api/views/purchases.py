@@ -18,9 +18,9 @@ class PurchasedTemplateViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(buyer=user)
             
         if self.action == 'list':
-            queryset = queryset.defer('svg', 'form_fields', 'svg_file')
+            queryset = queryset.defer('form_fields', 'svg_file')
         elif self.action == 'retrieve':
-            queryset = queryset.defer('svg')
+            pass
             
         return queryset.order_by('-created_at')
 
