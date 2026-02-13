@@ -192,12 +192,16 @@ def invalidate_template_cache(template_id=None):
                     break
                     
     except ImportError:
-        # Fallback: increment cache version if using versioned cache
-        # For LocMemCache, we can't easily invalidate by pattern
-        pass
-    except Exception:
-        # Silently fail if cache invalidation fails
-        pass
+        # Fallback for LocMemCache: clear the entire cache since pattern matching isn't supported
+        print("[Cache] LocMemCache detected, clearing all caches for invalidation.")
+        cache.clear()
+    except Exception as e:
+        print(f"[Cache] Invalidation failed: {e}")
+        # If it's a Redis error or other, try a clear as last resort
+        try:
+            cache.clear()
+        except:
+            pass
 
 
 def invalidate_all_template_caches():

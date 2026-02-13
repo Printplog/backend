@@ -187,37 +187,57 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
 
         if svg_patch_data:
             from ..svg_utils import merge_svg_patches
-            # Merge new patches with existing ones in the database
+            # 1. Merge new patches with existing ones in the database
             existing_patches = instance.svg_patches or []
             combined_patches = existing_patches + svg_patch_data
-            # Deduplicate/Merge to keep the instructions set minimal
             instance.svg_patches = merge_svg_patches(combined_patches)
             
-            # FAST SYNC: Update form_fields JSON directly for known patch types (like text renaming)
-            # This avoids expensive file re-parsing.
+            # 2. FAST SYNC: Update form_fields JSON directly for innerText changes
             if instance.form_fields:
-                updated_fields = list(instance.form_fields)
+                updated_fields = json.loads(json.dumps(instance.form_fields)) # Deep copy
                 modified = False
+                
+                print(f"[SVG-Sync] Started for template: {instance.name}")
+                print(f"[SVG-Sync] Processing {len(svg_patch_data)} patches...")
+                
                 for patch in svg_patch_data:
-                    # If we renamed a text field (innerText), we might want to update its label or value in form_fields?
-                    # Actually, innerText patches usually mean the content CHANGED.
-                    # If the ID matches a form field, let's update its default value.
                     p_id = patch.get('id')
                     p_attr = patch.get('attribute')
                     p_val = patch.get('value')
-                    
+
                     if p_id and p_attr == 'innerText':
+                        p_id_lower = p_id.lower()
                         for field in updated_fields:
-                            if field.get('id') == p_id:
-                                field['defaultValue'] = p_val # Update default value
+                            field_id = field.get('id', '')
+                            svg_el_id = field.get('svgElementId', '')
+                            
+                            # A. Match regular fields (Full match or Base ID match)
+                            # Check both case-sensitive and case-insensitive to be safe
+                            if p_id == svg_el_id or p_id == field_id or p_id_lower == svg_el_id.lower() or p_id_lower == field_id.lower():
+                                print(f"  [Match] Field '{field_id}' (SVG ID: {svg_el_id}) matched patch '{p_id}' -> '{p_val}'")
+                                field['defaultValue'] = p_val
+                                field['currentValue'] = p_val
                                 modified = True
-                
+                            
+                            # B. Match Select Options (Search inside the options array)
+                            if field.get('type') == 'select' and 'options' in field:
+                                for opt in field.get('options', []):
+                                    opt_id = opt.get('value', '')
+                                    opt_svg_id = opt.get('svgElementId', '')
+                                    
+                                    if p_id == opt_svg_id or p_id == opt_id or p_id_lower == opt_svg_id.lower() or p_id_lower == opt_id.lower():
+                                        print(f"  [Match] Select Option '{opt.get('label')}' matched patch '{p_id}' -> '{p_val}'")
+                                        opt['displayText'] = p_val
+                                        opt['label'] = p_val
+                                        modified = True
+
                 if modified:
                     instance.form_fields = updated_fields
+                    # Save explicitly here to ensure sync is locked in before return
                     instance.save(update_fields=['form_fields'])
-
-            instance.save(update_fields=['svg_patches'])
-            print(f"[AdminTemplateSerializer] Figma-style patches merged. Total instructions: {len(instance.svg_patches)}")
+                    print(f"[SVG-Sync] SUCCESS: form_fields updated and saved.")
+                else:
+                    print(f"[SVG-Sync] NOTICE: No matching form fields found for these patches.")
 
         # Continue with metadata updates
         instance = super().update(instance, validated_data)

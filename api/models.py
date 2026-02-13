@@ -59,14 +59,6 @@ class Template(models.Model):
             filename = f"{self.id}.svg"
             self.svg_file.save(filename, ContentFile(raw_svg.encode('utf-8')), save=False)
         
-    def save(self, *args, **kwargs):
-        # 1. Handle initial ingestion or full overwrite
-        raw_svg = getattr(self, '_raw_svg_data', None)
-        if raw_svg:
-            self.form_fields = parse_svg_to_form_fields(raw_svg)
-            filename = f"{self.id}.svg"
-            self.svg_file.save(filename, ContentFile(raw_svg.encode('utf-8')), save=False)
-        
         # 2. TRIGGER RE-PARSING ONLY IF FORCED (Manual Admin Button)
         # We no longer auto-reparse on patches to ensure maximum speed.
         elif self.pk and self.svg_file and getattr(self, '_force_reparse', False):

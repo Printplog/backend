@@ -96,8 +96,9 @@ def set_element_attribute(element, attribute, value, namespaces, svg_tree):
 def apply_svg_patches(svg_content, patches):
     """
     Applies a list of patches to an SVG string.
+    Ensures deterministic IDs are present before applying.
     """
-    if not patches:
+    if not svg_content:
         return svg_content
 
     try:
@@ -110,6 +111,48 @@ def apply_svg_patches(svg_content, patches):
         if 'svg' not in namespaces: namespaces['svg'] = 'http://www.w3.org/2000/svg'
         if 'xlink' not in namespaces: namespaces['xlink'] = 'http://www.w3.org/1999/xlink'
 
+        # 1. Ensure all elements have deterministic IDs (matching the Frontend's algorithm)
+        # We use data-internal-id as our primary lookup for patches
+        id_count = {}
+        
+        non_editable_tags = [
+            'defs', 'style', 'lineargradient', 'radialgradient',
+            'pattern', 'clippath', 'mask', 'filter', 'fegaussianblur', 'feoffset', 'feflood', 'fecomposite', 'femerge', 'femergenode'
+        ]
+
+        for element in svg_tree.xpath(".//*"):
+            tag = etree.QName(element).localname.lower()
+            if tag == 'svg': continue
+            
+            # SKIP logic must match useSvgStore.ts exactly
+            if tag in non_editable_tags:
+                continue
+            
+            # Smarter text check matching store's multi-line / tspan handling
+            text_parts = []
+            if element.text:
+                text_parts.append(element.text.strip())
+            for child in element:
+                if child.text:
+                    text_parts.append(child.text.strip())
+            
+            # Join with newline to match frontend store's join("\n")
+            full_text = "\n".join([p for p in text_parts if p]).strip().lower()
+            if full_text == "test document":
+                continue
+            
+            existing_id = element.get('id')
+            existing_internal_id = element.get('data-internal-id')
+            
+            base_id = existing_id or existing_internal_id or f"el-{tag}"
+            id_count[base_id] = id_count.get(base_id, 0) + 1
+            final_id = f"{base_id}_{id_count[base_id]}" if id_count[base_id] > 1 else base_id
+            
+            element.set('data-internal-id', final_id)
+
+        if not patches:
+            return etree.tostring(svg_tree, pretty_print=True, encoding='unicode', xml_declaration=False)
+
         applied_count = 0
         for patch in patches:
             element_id = patch.get('id')
@@ -119,10 +162,10 @@ def apply_svg_patches(svg_content, patches):
             if not all([element_id, attribute]):
                 continue
 
-            # Find the element
+            # Find the element using multiple possible attributes
             xpath_queries = [
+                f".//*[@data-internal-id='{element_id}']",
                 f".//*[@id='{element_id}']",
-                f".//svg:*[@id='{element_id}']",
                 f".//*[@name='{element_id}']",
                 f".//*[@data-name='{element_id}']"
             ]
