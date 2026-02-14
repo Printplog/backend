@@ -196,15 +196,16 @@ if ENV == "production" or USE_S3_STORAGE:
     
     # Cloudflare CDN Configuration
     BACKBLAZE_B2_CUSTOM_DOMAIN = os.getenv('BACKBLAZE_B2_CUSTOM_DOMAIN')
-    
+
     if BACKBLAZE_B2_CUSTOM_DOMAIN:
         MEDIA_URL = f'https://{BACKBLAZE_B2_CUSTOM_DOMAIN}/'
         AWS_S3_CUSTOM_DOMAIN = BACKBLAZE_B2_CUSTOM_DOMAIN
+        # When using Cloudflare Worker as a proxy, we don't want Django to sign URLs
+        # because the Worker handles authentication with B2.
+        AWS_QUERYSTRING_AUTH = False
     else:
         MEDIA_URL = f'{AWS_S3_ENDPOINT_URL}/{AWS_STORAGE_BUCKET_NAME}/'
-    
-    # Keep this TRUE because your bucket is Private
-    AWS_QUERYSTRING_AUTH = True
+        AWS_QUERYSTRING_AUTH = True
     AWS_QUERYSTRING_EXPIRE = 3600 # Signature valid for 1 hour
 
     # Cache control for CDN (set to 1 year for immutable files)

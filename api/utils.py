@@ -27,20 +27,15 @@ def get_signed_url(file_field):
             # Fallback for local storage or other backends
             return file_field.url
 
-        params = {'Bucket': storage.bucket_name, 'Key': file_field.name}
-        
-        # Generate standard S3 presigned URL (using endpoint_url from settings)
-        signed_url = client.generate_presigned_url('get_object', Params=params)
-        
-        # If using a custom domain (CDN), replace the host in the signed URL
+        # If using a custom domain (CDN), we expect the Cloudflare Worker to handle signing.
+        # We return the plain URL (which django-storages will build using AWS_S3_CUSTOM_DOMAIN).
         custom_domain = getattr(settings, 'AWS_S3_CUSTOM_DOMAIN', None)
         if custom_domain:
-            parsed = urlparse(signed_url)
-            # Reconstruct URL with new netloc (host) but keeping path and query params
-            # Ensure scheme is https
-            new_url = urlunparse(('https', custom_domain, parsed.path, parsed.params, parsed.query, parsed.fragment))
-            return new_url
+            return file_field.url
             
+        # Fallback to manual signing if no custom domain is set (e.g. direct B2 access)
+        params = {'Bucket': storage.bucket_name, 'Key': file_field.name}
+        signed_url = client.generate_presigned_url('get_object', Params=params)
         return signed_url
         
     except Exception as e:
