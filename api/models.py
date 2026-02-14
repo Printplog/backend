@@ -112,12 +112,16 @@ class PurchasedTemplate(models.Model):
         
         # 2. Inherit basic meta on first save
         if not self.pk and self.template:
+            if not self.name:
+                self.name = f"My {self.template.name}"
             if not self.svg_patches:
                 self.svg_patches = list(self.template.svg_patches)
             if not self.form_fields:
                 self.form_fields = list(self.template.form_fields)
             if not self.keywords:
                 self.keywords = list(self.template.keywords)
+        elif not self.pk and not self.name:
+            self.name = "Untitled Document"
 
         # 3. FIGMA-STYLE STRUCTURE SYNC:
         # We ONLY re-parse if explicitly forced.

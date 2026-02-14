@@ -47,6 +47,12 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         instance = PurchasedTemplate(**validated_data)
         instance.buyer = self.context['request'].user
         
+        # 0. Set default name if missing
+        if not instance.name and instance.template:
+            instance.name = f"My {instance.template.name}"
+        elif not instance.name:
+            instance.name = "Untitled Document"
+        
         # FIGMA-STYLE INHERITANCE: Force inheritance before we process field_updates
         if instance.template:
             if not instance.svg_patches:
