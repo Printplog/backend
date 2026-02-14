@@ -38,4 +38,5 @@ __pycache__/
 *.pyo
 *.pyd
 
+cloudflare-b2-worker/
 
