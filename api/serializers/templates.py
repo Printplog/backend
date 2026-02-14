@@ -30,8 +30,11 @@ class TemplateSerializer(serializers.ModelSerializer):
         required=False
     )
     svg_url = serializers.SerializerMethodField()
-    banner = serializers.SerializerMethodField()
     tool_price = serializers.SerializerMethodField()
+    
+    # Temporary field for initial SVG ingestion or full overwrites
+    svg = serializers.CharField(write_only=True, required=False)
+
     
     class Meta:
         model = Template
@@ -39,12 +42,11 @@ class TemplateSerializer(serializers.ModelSerializer):
     
     def get_svg_url(self, obj):
         if obj.svg_file:
-            return get_signed_url(obj.svg_file)
-        return None
-
-    def get_banner(self, obj):
-        if obj.banner:
-            return get_signed_url(obj.banner)
+            url = get_signed_url(obj.svg_file)
+            request = self.context.get('request')
+            if request and url and url.startswith('/'):
+                return request.build_absolute_uri(url)
+            return url
         return None
 
     def get_tool_price(self, obj):
@@ -56,12 +58,17 @@ class TemplateSerializer(serializers.ModelSerializer):
         tutorial_url = request.data.get('tutorial_url') if request else None
         tutorial_title = request.data.get('tutorial_title') if request else None
         fonts_data = validated_data.pop('fonts', None)
+        svg_data = validated_data.pop('svg', None)
         
         # Create the template
-        template = Template.objects.create(**validated_data)
+        template = Template(**validated_data)
+        if svg_data:
+            template._raw_svg_data = svg_data
+        template.save()
         
         if fonts_data:
             template.fonts.set(fonts_data)
+
         
         # Create tutorial if URL is provided
         if tutorial_url:
@@ -79,12 +86,17 @@ class TemplateSerializer(serializers.ModelSerializer):
         tutorial_url = request.data.get('tutorial_url') if request else None
         tutorial_title = request.data.get('tutorial_title') if request else None
         fonts_data = validated_data.pop('fonts', None)
+        svg_data = validated_data.pop('svg', None)
         
+        if svg_data:
+            instance._raw_svg_data = svg_data
+            
         # Update the template
         instance = super().update(instance, validated_data)
         
         if fonts_data is not None:
             instance.fonts.set(fonts_data)
+
         
         # Update or create tutorial
         if tutorial_url is not None:  # Allow clearing tutorial by sending empty string
@@ -106,6 +118,14 @@ class TemplateSerializer(serializers.ModelSerializer):
         if view and view.action == 'list':
             representation.pop('form_fields', None)
         
+        # Manually sign banner URL if present
+        if instance.banner:
+            url = get_signed_url(instance.banner)
+            request = self.context.get('request')
+            if request and url and url.startswith('/'):
+                url = request.build_absolute_uri(url)
+            representation['banner'] = url
+            
         return representation
 
 
@@ -120,7 +140,6 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         required=False
     )
     svg_url = serializers.SerializerMethodField()
-    banner = serializers.SerializerMethodField()
     tool_price = serializers.SerializerMethodField()
     
     # Temporary field for initial SVG ingestion or full overwrites
@@ -136,21 +155,20 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Template
         fields = '__all__'
-        read_only_fields = ('id', 'created_at', 'updated_at', 'form_fields')
+        read_only_fields = ('id', 'created_at', 'updated_at', 'form_fields', 'tool_price')
 
     def get_svg_url(self, obj):
         if obj.svg_file:
-            return get_signed_url(obj.svg_file)
-        return None
-
-    def get_banner(self, obj):
-        if obj.banner:
-            return get_signed_url(obj.banner)
+            url = get_signed_url(obj.svg_file)
+            request = self.context.get('request')
+            if request and url and url.startswith('/'):
+                return request.build_absolute_uri(url)
+            return url
         return None
     
     def get_tool_price(self, obj):
         return obj.tool.price if obj.tool else None
-
+    
     def create(self, validated_data):
         fonts_data = validated_data.pop('fonts', None)
         svg_data = validated_data.pop('svg', None)
@@ -187,57 +205,28 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
 
         if svg_patch_data:
             from ..svg_utils import merge_svg_patches
+            from ..svg_sync import sync_form_fields_with_patches
             # 1. Merge new patches with existing ones in the database
             existing_patches = instance.svg_patches or []
+            print(f"[Admin-Update] New Patches: {len(svg_patch_data)}, Existing: {len(existing_patches)}")
             combined_patches = existing_patches + svg_patch_data
             instance.svg_patches = merge_svg_patches(combined_patches)
             
-            # 2. FAST SYNC: Update form_fields JSON directly for innerText changes
-            if instance.form_fields:
-                updated_fields = json.loads(json.dumps(instance.form_fields)) # Deep copy
-                modified = False
-                
-                print(f"[SVG-Sync] Started for template: {instance.name}")
-                print(f"[SVG-Sync] Processing {len(svg_patch_data)} patches...")
-                
-                for patch in svg_patch_data:
-                    p_id = patch.get('id')
-                    p_attr = patch.get('attribute')
-                    p_val = patch.get('value')
+            # 2. SYNC: Update form_fields JSON directly (Handles innerText and ID changes)
+            print(f"[SVG-Sync] Started for template: {instance.name} ({instance.id})")
+            updated_fields, modified = sync_form_fields_with_patches(instance, svg_patch_data)
+            
+            if modified:
+                print(f"[SVG-Sync] Modified {len(updated_fields)} fields. Saving to DB.")
+                instance.form_fields = updated_fields
+                # Save explicitly here to ensure sync is locked in before return
+                instance.save(update_fields=['form_fields', 'svg_patches'])
+                print(f"[SVG-Sync] SUCCESS: form_fields updated and saved.")
+            else:
+                # Still save svg_patches if they were updated
+                instance.save(update_fields=['svg_patches'])
+                print(f"[SVG-Sync] NOTICE: No fields modified by these patches, but svg_patches saved.")
 
-                    if p_id and p_attr == 'innerText':
-                        p_id_lower = p_id.lower()
-                        for field in updated_fields:
-                            field_id = field.get('id', '')
-                            svg_el_id = field.get('svgElementId', '')
-                            
-                            # A. Match regular fields (Full match or Base ID match)
-                            # Check both case-sensitive and case-insensitive to be safe
-                            if p_id == svg_el_id or p_id == field_id or p_id_lower == svg_el_id.lower() or p_id_lower == field_id.lower():
-                                print(f"  [Match] Field '{field_id}' (SVG ID: {svg_el_id}) matched patch '{p_id}' -> '{p_val}'")
-                                field['defaultValue'] = p_val
-                                field['currentValue'] = p_val
-                                modified = True
-                            
-                            # B. Match Select Options (Search inside the options array)
-                            if field.get('type') == 'select' and 'options' in field:
-                                for opt in field.get('options', []):
-                                    opt_id = opt.get('value', '')
-                                    opt_svg_id = opt.get('svgElementId', '')
-                                    
-                                    if p_id == opt_svg_id or p_id == opt_id or p_id_lower == opt_svg_id.lower() or p_id_lower == opt_id.lower():
-                                        print(f"  [Match] Select Option '{opt.get('label')}' matched patch '{p_id}' -> '{p_val}'")
-                                        opt['displayText'] = p_val
-                                        opt['label'] = p_val
-                                        modified = True
-
-                if modified:
-                    instance.form_fields = updated_fields
-                    # Save explicitly here to ensure sync is locked in before return
-                    instance.save(update_fields=['form_fields'])
-                    print(f"[SVG-Sync] SUCCESS: form_fields updated and saved.")
-                else:
-                    print(f"[SVG-Sync] NOTICE: No matching form fields found for these patches.")
 
         # Continue with metadata updates
         instance = super().update(instance, validated_data)
@@ -254,4 +243,12 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         if view and view.action == 'list':
             representation.pop('form_fields', None)
         
+        # Manually sign banner URL if present
+        if instance.banner:
+            url = get_signed_url(instance.banner)
+            request = self.context.get('request')
+            if request and url and url.startswith('/'):
+                url = request.build_absolute_uri(url)
+            representation['banner'] = url
+            
         return representation

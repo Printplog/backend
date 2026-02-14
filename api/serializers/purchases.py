@@ -47,6 +47,13 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         instance = PurchasedTemplate(**validated_data)
         instance.buyer = self.context['request'].user
         
+        # FIGMA-STYLE INHERITANCE: Force inheritance before we process field_updates
+        if instance.template:
+            if not instance.svg_patches:
+                instance.svg_patches = list(instance.template.svg_patches)
+            if not instance.form_fields:
+                instance.form_fields = list(instance.template.form_fields)
+                
         # If user provided a raw SVG (e.g. tool output), save to storage
         if svg_data:
             instance._raw_svg_data = svg_data
@@ -59,6 +66,13 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
             for update in field_updates:
                 if update['id'] in field_map:
                     field_map[update['id']]['currentValue'] = update['value']
+                else:
+                    # If it doesn't match a template field, still add it as a custom field
+                    field_map[update['id']] = {
+                        'id': update['id'],
+                        'currentValue': update['value'],
+                        'name': update['id'].replace('_', ' ').capitalize()
+                    }
             instance.form_fields = list(field_map.values())
 
         self.charge_if_test_false(instance, validated_data, is_update=False)
@@ -91,27 +105,16 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
 
         if svg_patch_data:
             from ..svg_utils import merge_svg_patches
+            from ..svg_sync import sync_form_fields_with_patches
             existing = instance.svg_patches or []
             instance.svg_patches = merge_svg_patches(existing + svg_patch_data)
             
-            # FAST SYNC: Update form_fields JSON directly for purchases
-            if instance.form_fields:
-                updated_fields = list(instance.form_fields)
-                modified = False
-                for patch in svg_patch_data:
-                    p_id = patch.get('id')
-                    p_attr = patch.get('attribute')
-                    p_val = patch.get('value')
-                    
-                    if p_id and p_attr == 'innerText':
-                        for field in updated_fields:
-                            if field.get('id') == p_id:
-                                field['currentValue'] = p_val
-                                modified = True
-                
-                if modified:
-                    instance.form_fields = updated_fields
-                    instance.save(update_fields=['form_fields'])
+            # ADVANCED SYNC: Use helper to update form_fields JSON
+            updated_fields, modified = sync_form_fields_with_patches(instance, svg_patch_data)
+            
+            if modified:
+                instance.form_fields = updated_fields
+                instance.save(update_fields=['form_fields'])
             
             instance.save(update_fields=['svg_patches'])
 
@@ -125,8 +128,28 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         view = self.context.get('view')
+        
+        request = self.context.get('request')
+        
         if view and view.action == 'list':
             representation.pop('form_fields', None)
+        else:
+            # EMERGENCY SYNC: If form_fields are empty but template has them, inherit now
+            if not representation.get('form_fields') and instance.template:
+                # Direct inheritance if DB was out of sync
+                representation['form_fields'] = instance.template.form_fields
+                if not instance.form_fields and representation['form_fields']:
+                    instance.form_fields = representation['form_fields']
+                    instance.save(update_fields=['form_fields'])
+
+        # Absolute URL for SVG
+        if representation.get('svg_url') and representation['svg_url'].startswith('/') and request:
+            representation['svg_url'] = request.build_absolute_uri(representation['svg_url'])
+            
+        # Absolute URL for Banner
+        if representation.get('banner') and representation['banner'].startswith('/') and request:
+            representation['banner'] = request.build_absolute_uri(representation['banner'])
+            
         return representation
     
     def get_tool_price(self, obj):
@@ -138,4 +161,9 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         return None
 
     def get_svg_url(self, obj):
-        return get_signed_url(obj.svg_file) if obj.svg_file else None
+        if obj.svg_file:
+            return get_signed_url(obj.svg_file)
+        # Fallback to base template SVG if purchase has no bespoke file
+        if obj.template and obj.template.svg_file:
+            return get_signed_url(obj.template.svg_file)
+        return None

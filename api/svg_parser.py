@@ -364,92 +364,106 @@ def parse_svg_to_form_fields(svg_text: str) -> List[Dict[str, Any]]:
     
     elements = root.findall(".//*[@id]")
     
-    fields_list = []
-    select_options_map: Dict[str, List[Dict]] = {}
+def process_element_to_field(element: ET.Element, fields_list: List[Dict[str, Any]], select_options_map: Dict[str, List[Dict[str, Any]]]):
+    """
+    Process a single SVG element and either update existing fields or add new ones.
+    """
+    original_element_id = element.attrib.get("id", "")
+    if not original_element_id:
+        return
+
+    # Robust text extraction: Handle multiline text (tspans)
+    text_parts = []
+    if element.text and element.text.strip():
+        text_parts.append(element.text.strip())
+        
+    for child in element:
+        if child.text and child.text.strip():
+            text_parts.append(child.text.strip())
+        if child.tail and child.tail.strip():
+            text_parts.append(child.tail.strip())
     
-    for i, element in enumerate(elements):
-        original_element_id = element.attrib.get("id", "")
+    text_content = "\n".join(text_parts)
+    
+    # Extract link URL before splitting (URLs contain dots)
+    element_id, url = extract_link_url(original_element_id)
+    
+    # Split ID into parts
+    parts = element_id.split(".")
+    base_id = parts[0]
+    
+    # ====================================================================
+    # HANDLE SELECT FIELDS
+    # ====================================================================
+    if any(p.startswith("select_") for p in parts):
+        option = create_select_option(original_element_id, element, parts)
+        modifiers = extract_select_modifiers(parts)
         
+        # Create select field if first option
+        if base_id not in select_options_map:
+            select_options_map[base_id] = []
+            field = create_select_field(base_id, original_element_id, modifiers["editable"])
+            fields_list.append(field)
+        
+        # Add option to map
+        select_options_map[base_id].append(option)
+        
+        # Update the field with option and modifiers
+        for field in fields_list:
+            if field["id"] == base_id:
+                field["options"] = select_options_map[base_id]
+                update_select_field(field, option, is_element_visible(element), modifiers)
+                break
+        
+        return
+    
+    # ====================================================================
+    # HANDLE REGULAR FIELDS
+    # ====================================================================
+    
+    # Validate track_ position
+    if not validate_track_position(parts):
+        logger.warning(f"Skipping element {element_id}: track_ extension must be last")
+        return
+    
+    # Parse all extensions
+    extensions = parse_field_extensions(parts)
 
-        
-        if not original_element_id:
-            continue
-        
-        # Robust text extraction: Handle multiline text (tspans)
-        # element.text only gets text before the first child.
-        text_parts = []
-        if element.text and element.text.strip():
-            text_parts.append(element.text.strip())
-            
-        for child in element:
-            # We assume children (like tspan) represent new segments/lines
-            if child.text and child.text.strip():
-                text_parts.append(child.text.strip())
-            # Capture tail text (text after closing tag of child)
-            if child.tail and child.tail.strip():
-                text_parts.append(child.tail.strip())
-        
-        text_content = "\n".join(text_parts)
-        
-        # Extract link URL before splitting (URLs contain dots)
-        element_id, url = extract_link_url(original_element_id)
-        
-        # Split ID into parts
-        parts = element_id.split(".")
-        base_id = parts[0]
-        
-        # ====================================================================
-        # HANDLE SELECT FIELDS
-        # ====================================================================
-        if any(p.startswith("select_") for p in parts):
-            option = create_select_option(original_element_id, element, parts)
-            modifiers = extract_select_modifiers(parts)
-            
-            # Create select field if first option
-            if base_id not in select_options_map:
-                select_options_map[base_id] = []
-                field = create_select_field(base_id, original_element_id, modifiers["editable"])
-                fields_list.append(field)
-            
-            # Add option to map
-            select_options_map[base_id].append(option)
-            
-            # Update the field with option and modifiers
-            for field in fields_list:
-                if field["id"] == base_id:
-                    field["options"] = select_options_map[base_id]
-                    update_select_field(field, option, is_element_visible(element), modifiers)
-                    break
-            
-            continue  # Skip regular field processing
-        
-        # ====================================================================
-        # HANDLE REGULAR FIELDS
-        # ====================================================================
-        
-        # Validate track_ position
-        if not validate_track_position(parts):
-            logger.warning(f"Skipping element {element_id}: track_ extension must be last")
-            continue
-        
-        # Parse all extensions
-        extensions = parse_field_extensions(parts)
+    if extensions.get("requires_grayscale") and extensions["field_type"] not in {"upload", "file"}:
+        logger.warning(
+            "Grayscale extension on non-upload field '%s' (element ID: %s)",
+            base_id,
+            original_element_id,
+        )
+    
+    # Get default value
+    default_value = get_default_value(extensions["field_type"], text_content, parts)
+    
+    # Extract helper text from data-helper attribute
+    helper_text = element.attrib.get("data-helper", "")
+    
+    # Create field
+    field = create_regular_field(base_id, original_element_id, extensions, default_value, url, helper_text)
+    fields_list.append(field)
 
-        if extensions.get("requires_grayscale") and extensions["field_type"] not in {"upload", "file"}:
-            logger.warning(
-                "Grayscale extension on non-upload field '%s' (element ID: %s)",
-                base_id,
-                original_element_id,
-            )
-        
-        # Get default value
-        default_value = get_default_value(extensions["field_type"], text_content, parts)
-        
-        # Extract helper text from data-helper attribute
-        helper_text = element.attrib.get("data-helper", "")
-        
-        # Create field
-        field = create_regular_field(base_id, original_element_id, extensions, default_value, url, helper_text)
-        fields_list.append(field)
+
+def parse_svg_to_form_fields(svg_text: str) -> List[Dict[str, Any]]:
+    """
+    Parse SVG text and convert elements with IDs into form field definitions.
+    """
+    try:
+        root = ET.fromstring(svg_text)
+    except ET.ParseError as e:
+        logger.error(f"Failed to parse SVG: {e}")
+        return []
+    
+    elements = root.findall(".//*[@id]")
+    
+    fields_list = []
+    select_options_map: Dict[str, List[Dict[str, Any]]] = {}
+    
+    for element in elements:
+        process_element_to_field(element, fields_list, select_options_map)
     
     return fields_list
+

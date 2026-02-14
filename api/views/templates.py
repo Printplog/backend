@@ -3,6 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.db.models import Prefetch
+from django.http import HttpResponse
+import os
 
 from ..models import Template, Tool
 from ..serializers import TemplateSerializer, AdminTemplateSerializer
@@ -142,6 +144,26 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
         response = super().destroy(request, *args, **kwargs)
         invalidate_template_cache(template_id=template_id)
         return response
+
+    @action(detail=True, methods=['get'], url_path='svg')
+    def get_svg(self, request, pk=None):
+        """
+        Proxy to fetch SVG content directly to avoid CORS issues in Admin Editor.
+        This provides a fallback mechanism when direct CDN access is blocked (e.g., localhost).
+        """
+        template = self.get_object()
+        if not template.svg_file:
+             return Response({"error": "No SVG file found"}, status=404)
+        
+        try:
+            # Read from storage
+            # Note: For S3/B2, this might stream or download to memory
+            template.svg_file.open()
+            content = template.svg_file.read()
+            return HttpResponse(content, content_type="image/svg+xml")
+        except Exception as e:
+            return Response({"error": f"Failed to read SVG: {str(e)}"}, status=500)
+
 
     @action(detail=True, methods=['post'], url_path='reparse')
     def reparse(self, request, pk=None):
