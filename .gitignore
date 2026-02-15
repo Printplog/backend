@@ -6,6 +6,7 @@ env/
 # Static files
 staticfiles/
 media/
+media_check_backup/
 temp_uploads/
 
 # Daphne socket and lock files
