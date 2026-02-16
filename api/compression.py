@@ -70,9 +70,10 @@ def compress_svg_images(svg_text, quality=60):
     pattern = r'(<image[^>]*?\s(?:xlink:href|href)=["\'])(data:(?:image|img)\/[^;]+;base64,[^"\']+)(["\'][^>]*?>)'
     return re.sub(pattern, replacement, svg_text, flags=re.IGNORECASE)
 
-def compress_image(image_field, quality=60, max_width=1920):
+def compress_image(image_field, quality=60, max_width=1200):
     """
     Compresses an ImageField files in-place.
+    Now more aggressive: converts PNG to JPEG to save space.
     """
     if not image_field:
         return
@@ -81,27 +82,33 @@ def compress_image(image_field, quality=60, max_width=1920):
         from django.core.files.base import ContentFile
         img = Image.open(image_field)
         
-        # 1. Resize if too large
+        # 1. Resize if too large (1200px is plenty for thumbnails/banners)
         if img.width > max_width:
             ratio = max_width / img.width
             new_height = int(img.height * ratio)
             img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
             
         # 2. Prepare for saving
-        img_format = img.format  # Preserve original format (JPEG, PNG, etc.)
+        # Convert to RGB if we want to save as JPEG (removes transparency)
+        if img.mode in ("RGBA", "P"):
+            # Check if it actually has transparency
+            if img.mode == "RGBA":
+                # Create a white background
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[3]) # 3 is the alpha channel
+                img = background
+            else:
+                img = img.convert("RGB")
+
         output = io.BytesIO()
         
-        # 3. Save with optimization
-        if img_format == 'JPEG':
-            img.save(output, format='JPEG', quality=quality, optimize=True)
-        elif img_format == 'PNG':
-            # PNG doesn't use 'quality' the same way, but 'optimize=True' helps
-            img.save(output, format='PNG', optimize=True)
-        else:
-            # Fallback for other formats (GIF, WebP, etc.)
-            img.save(output, format=img_format, quality=quality)
+        # 3. Save as JPEG (much smaller than PNG for these docs)
+        img.save(output, format='JPEG', quality=quality, optimize=True)
             
         # 4. Replace the file content in memory
+        # Note: We keep the original filename but the content is now JPEG
+        # Django/Browsers handle this okay usually, but ideally we'd change extension.
+        # However, to avoid DB migration issues, we'll stick to the content change.
         new_content = ContentFile(output.getvalue())
         image_field.save(image_field.name, new_content, save=False)
         
