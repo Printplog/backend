@@ -192,6 +192,9 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         
         if svg_data:
             instance._raw_svg_data = svg_data
+            # CRITICAL: Clear patches when replacing base SVG to avoid graphical corruption
+            instance.svg_patches = []
+            print(f"[Admin-Update] SVG replaced for {instance.name}. Cleared all patches.")
         
         # --- Figma-style Patch Logic ---
         svg_patch_data = validated_data.pop('svg_patch', None)
