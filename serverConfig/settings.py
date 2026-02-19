@@ -176,54 +176,17 @@ STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Media files (User uploaded content)
-USE_S3_STORAGE = os.getenv('USE_S3_STORAGE', 'False').lower() == 'true'
-
-if ENV == "production" or USE_S3_STORAGE:
-    # Backblaze B2 S3 Compatible Storage Settings
-    AWS_ACCESS_KEY_ID = os.getenv('BACKBLAZE_B2_KEY_ID')
-    AWS_SECRET_ACCESS_KEY = os.getenv('BACKBLAZE_B2_APPLICATION_KEY')
-    AWS_STORAGE_BUCKET_NAME = os.getenv('BACKBLAZE_B2_BUCKET_NAME')
-    AWS_S3_ENDPOINT_URL = os.getenv('BACKBLAZE_S3_ENDPOINT_URL', 'https://s3.us-east-005.backblazeb2.com')
-    AWS_S3_REGION_NAME = os.getenv('BACKBLAZE_S3_REGION', 'us-east-1')
-    
-    # Use virtual-host style addressing for B2
-    AWS_S3_ADDRESSING_STYLE = 'virtual'
-    
-    # B2 doesn't support S3 ACLs; setting this to None or removing it avoids 403s
-    AWS_DEFAULT_ACL = None
-    AWS_S3_SIGNATURE_VERSION = 's3v4'
-    AWS_S3_FILE_OVERWRITE = False
-    
-    # Cloudflare CDN Configuration
-    BACKBLAZE_B2_CUSTOM_DOMAIN = os.getenv('BACKBLAZE_B2_CUSTOM_DOMAIN')
-
-    if BACKBLAZE_B2_CUSTOM_DOMAIN:
-        MEDIA_URL = f'https://{BACKBLAZE_B2_CUSTOM_DOMAIN}/'
-        AWS_S3_CUSTOM_DOMAIN = BACKBLAZE_B2_CUSTOM_DOMAIN
-        # When using Cloudflare Worker as a proxy, we don't want Django to sign URLs
-        # because the Worker handles authentication with B2.
-        AWS_QUERYSTRING_AUTH = False
-    else:
-        MEDIA_URL = f'{AWS_S3_ENDPOINT_URL}/{AWS_STORAGE_BUCKET_NAME}/'
-        AWS_QUERYSTRING_AUTH = True
-    AWS_QUERYSTRING_EXPIRE = 3600 # Signature valid for 1 hour
-
-    # Cache control for CDN (set to 1 year for immutable files)
-    AWS_S3_OBJECT_PARAMETERS = {
-        'CacheControl': 'max-age=31536000, public',
-    }
-else:
-    MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
-    # Add Cross-Origin-Resource-Policy header for development
-    SECURE_CROSS_ORIGIN_OPENER_POLICY = None
-    SECURE_REFERRER_POLICY = 'no-referrer-when-downgrade'
-
+MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# Add Cross-Origin-Resource-Policy header for development
+SECURE_CROSS_ORIGIN_OPENER_POLICY = None
+SECURE_REFERRER_POLICY = 'no-referrer-when-downgrade'
 
 # Django 4.2+ Storages configuration
 STORAGES = {
     "default": {
-        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage" if (ENV == "production" or USE_S3_STORAGE) else "django.core.files.storage.FileSystemStorage",
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",

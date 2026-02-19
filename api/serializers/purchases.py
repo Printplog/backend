@@ -140,13 +140,19 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         if view and view.action == 'list':
             representation.pop('form_fields', None)
         else:
-            # EMERGENCY SYNC: If form_fields are empty but template has them, inherit now
+            # EMERGENCY SYNC: If data is missing but template has it, inherit now
             if not representation.get('form_fields') and instance.template:
-                # Direct inheritance if DB was out of sync
                 representation['form_fields'] = instance.template.form_fields
                 if not instance.form_fields and representation['form_fields']:
                     instance.form_fields = representation['form_fields']
                     instance.save(update_fields=['form_fields'])
+        
+        # Keywords should be available in list view for split detection on dashboard
+        if not representation.get('keywords') and instance.template:
+            representation['keywords'] = instance.template.keywords
+            if not instance.keywords and representation['keywords']:
+                instance.keywords = representation['keywords']
+                instance.save(update_fields=['keywords'])
 
         # Absolute URL for SVG
         if representation.get('svg_url') and representation['svg_url'].startswith('/') and request:
