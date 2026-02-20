@@ -36,6 +36,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     
     downloads = models.IntegerField(default=0)
 
+
     objects = UserManager()
 
     USERNAME_FIELD = 'username'
