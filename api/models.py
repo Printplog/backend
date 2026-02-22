@@ -182,8 +182,9 @@ class Font(models.Model):
 
 class SiteSettings(models.Model):
     # 1. Contact & Support Configurations
-    whatsapp_number = models.CharField(max_length=50, blank=True, default="2349160914217", help_text="E.g. 2349160914217")
-    support_email = models.EmailField(blank=True, help_text="Central support email")
+    whatsapp_number = models.CharField(max_length=50, blank=True, default="2349160914217", help_text="Support WhatsApp Number (e.g. 234...)")
+    whatsapp_community_link = models.URLField(blank=True, help_text="WhatsApp Community/Group Invite Link")
+    support_email = models.EmailField(blank=True, help_text="Platform Support Email")
     telegram_link = models.URLField(blank=True, help_text="Telegram Group/Channel link")
     twitter_link = models.URLField(blank=True, help_text="Twitter/X link")
     instagram_link = models.URLField(blank=True, help_text="Instagram link")
