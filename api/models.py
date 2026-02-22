@@ -191,6 +191,7 @@ class SiteSettings(models.Model):
     # 2. Wallet & Financial Constraints
     min_topup_amount = models.DecimalField(max_digits=10, decimal_places=2, default=5.00, help_text="Minimum top-up amount in USD")
     crypto_address = models.CharField(max_length=255, blank=True, help_text="Fallback / Master BEP20 USDT Address")
+    funding_whatsapp_number = models.CharField(max_length=50, blank=True, default="2349160914217", help_text="WhatsApp for manual deposits")
     exchange_rate_override = models.DecimalField(max_digits=10, decimal_places=2, default=1650.00, help_text="Flat Dollar-to-Naira Exchange Rate (e.g. 1650)")
 
     # 3. Platform Toggles (Kill Switches)
