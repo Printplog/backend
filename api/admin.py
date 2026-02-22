@@ -35,3 +35,4 @@ class TemplateAdmin(admin.ModelAdmin):
 admin.site.register(Tool)
 admin.site.register(Template, TemplateAdmin)
 admin.site.register(PurchasedTemplate)
+admin.site.register(SiteSettings)

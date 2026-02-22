@@ -26,7 +26,7 @@ class SiteSettingsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'], url_path='request-code')
     def request_code(self, request):
-        if not request.user.is_staff:
+        if not request.user.is_superuser:
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
         
         # Generate 6-digit code
@@ -36,13 +36,36 @@ class SiteSettingsViewSet(viewsets.ViewSet):
         cache_key = f"admin_settings_otp_{request.user.id}"
         cache.set(cache_key, code, 300)
         
+        # DEV MODE CONVENIENCE: Print to console
+        if settings.DEBUG:
+            print(f"=========================================")
+            print(f"🔒 DEV MODE - ADMIN OTP CODE: {code}")
+            print(f"=========================================")
+        
+        # Gather all superuser emails
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        superusers = User.objects.filter(is_superuser=True)
+        recipient_list = [user.email for user in superusers if user.email]
+        
+        # Fallback if no superusers have emails
+        if not recipient_list:
+            if hasattr(settings, 'EMAIL_HOST_USER') and settings.EMAIL_HOST_USER:
+                recipient_list = [settings.EMAIL_HOST_USER]
+            else:
+                recipient_list = ["corehiseven@gmail.com"] # Original fallback
+
         # Send email
         try:
-            subject = "Admin Settings Verification Code"
-            message = f"Your verification code for updating site settings is: {code}. This code expires in 5 minutes."
+            subject = "SECURITY ALERT: Admin Settings Modification Attempt"
+            message = (
+                f"Attention Admin,\n\n"
+                f"User '{request.user.username}' ({request.user.email}) is attempting to modify the global Site Settings.\n\n"
+                f"If this is authorized, here is the verification code: {code}\n"
+                f"This code will expire in 5 minutes.\n\n"
+                f"If you did not authorize this change, please check your system logs immediately."
+            )
             from_email = settings.DEFAULT_FROM_EMAIL
-            recipient_list = [settings.EMAIL_HOST_USER, "corehiseven@gmail.com"] # The owner's email from .env
-            
             send_mail(subject, message, from_email, recipient_list)
             return Response({"message": "Verification code sent to email."})
         except Exception as e:
@@ -52,7 +75,7 @@ class SiteSettingsViewSet(viewsets.ViewSet):
             return Response({"error": f"Failed to send email: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def partial_update(self, request, pk=None):
-        if not request.user.is_staff:
+        if not request.user.is_superuser:
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
 
         settings_obj = self.get_object()

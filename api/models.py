@@ -181,8 +181,29 @@ class Font(models.Model):
         return self.name
 
 class SiteSettings(models.Model):
-    crypto_address = models.CharField(max_length=255, blank=True)
-    whatsapp_number = models.CharField(max_length=50, blank=True)
+    # 1. Contact & Support Configurations
+    whatsapp_number = models.CharField(max_length=50, blank=True, default="2349160914217", help_text="E.g. 2349160914217")
+    support_email = models.EmailField(blank=True, help_text="Central support email")
+    telegram_link = models.URLField(blank=True, help_text="Telegram Group/Channel link")
+    twitter_link = models.URLField(blank=True, help_text="Twitter/X link")
+    instagram_link = models.URLField(blank=True, help_text="Instagram link")
+
+    # 2. Wallet & Financial Constraints
+    min_topup_amount = models.DecimalField(max_digits=10, decimal_places=2, default=5.00, help_text="Minimum top-up amount in USD")
+    crypto_address = models.CharField(max_length=255, blank=True, help_text="Fallback / Master BEP20 USDT Address")
+    exchange_rate_override = models.DecimalField(max_digits=10, decimal_places=2, default=1650.00, help_text="Flat Dollar-to-Naira Exchange Rate (e.g. 1650)")
+
+    # 3. Platform Toggles (Kill Switches)
+    maintenance_mode = models.BooleanField(default=False, help_text="Block non-admins with a maintenance screen")
+    disable_new_signups = models.BooleanField(default=False, help_text="Temporarily block new users from creating accounts")
+    disable_deposits = models.BooleanField(default=False, help_text="Lock the wallet top-up functionality temporarily")
+
+    # 4. Branding Defaults
+    global_announcement_text = models.TextField(blank=True, help_text="Text for global dashboard banner")
+    global_announcement_link = models.URLField(blank=True, help_text="Optional link for global banner")
+    enable_global_announcement = models.BooleanField(default=False, help_text="Show the global banner to all users")
+
+    # Legacy / Other Fields
     manual_purchase_text = models.TextField(blank=True)
     dev_name_obfuscated = models.TextField(blank=True)
     owner_name_obfuscated = models.TextField(blank=True)

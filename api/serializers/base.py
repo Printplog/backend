@@ -37,5 +37,5 @@ class FontSerializer(serializers.ModelSerializer):
 class SiteSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = SiteSettings
-        fields = ['crypto_address', 'whatsapp_number', 'manual_purchase_text', 'updated_at']
-        read_only_fields = ['updated_at']
+        fields = '__all__'
+        read_only_fields = ['id', 'updated_at']
