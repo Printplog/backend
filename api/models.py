@@ -188,6 +188,7 @@ class SiteSettings(models.Model):
     telegram_link = models.URLField(blank=True, help_text="Telegram Group/Channel link")
     twitter_link = models.URLField(blank=True, help_text="Twitter/X link")
     instagram_link = models.URLField(blank=True, help_text="Instagram link")
+    tiktok_link = models.URLField(blank=True, help_text="TikTok link")
 
     # 2. Wallet & Financial Constraints
     min_topup_amount = models.DecimalField(max_digits=10, decimal_places=2, default=5.00, help_text="Minimum top-up amount in USD")
