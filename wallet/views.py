@@ -40,15 +40,23 @@ class CreateCryptoPaymentView(APIView):
     CALLBACK_SECRET = "your_callback_secret_here"
 
     def post(self, request):
-        wallet = request.user.wallet
-        
-        # Prevent multiple pending transactions
-        if Transaction.objects.filter(wallet=wallet, status=Transaction.Status.PENDING).exists():
+        if not request.user.is_authenticated:
+            return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        # Prevent multiple pending transactions - firmly scoped to this user ID
+        user_id = request.user.id
+        has_pending = Transaction.objects.filter(
+            wallet__user_id=user_id, 
+            status=Transaction.Status.PENDING
+        ).exists()
+
+        if has_pending:
             return Response(
                 {"detail": "You have a pending transaction. Please wait until it is completed before adding more funds."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        wallet = request.user.wallet
         # Fetch dynamic receiving address from SiteSettings
         settings_obj = SiteSettings.get_settings()
         receiving_address = settings_obj.crypto_address or "0x8482a1d4716736bf3b71736fafac9e8cd679fae8"
