@@ -332,10 +332,74 @@ def create_regular_field(base_id: str, element_id: str, extensions: Dict[str, An
 
 
 # ============================================================================
+# ID-ONLY FIELD PARSER
+# ============================================================================
+
+def parse_field_from_id(element_id: str, text_content: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Parse a field definition directly from an SVG element ID string.
+
+    This does not require an ET.Element — all field metadata (type, generationRule,
+    max, dependsOn, etc.) is encoded in the ID itself.
+
+    text_content: preserved from the existing form_field's defaultValue so the
+    user's text isn't lost when only the ID metadata changes.
+
+    Returns a field dict on success, or None if the ID doesn't produce a valid field.
+    """
+    if not element_id:
+        return None
+
+    # Select option IDs need multi-element context — skip them here
+    if any(p.startswith("select_") for p in element_id.split(".")):
+        return None
+
+    # Known explicit field types (mapped by parse_field_extensions via extension parts)
+    KNOWN_FIELD_TYPES = {
+        "text", "textarea", "select", "checkbox", "date", "upload",
+        "file", "sign", "gen", "status", "hide", "number", "range",
+        "color", "email", "tel", "url", "password",
+    }
+
+    try:
+        # Extract link URL before splitting (URLs contain dots)
+        cleaned_id, url = extract_link_url(element_id)
+
+        parts = cleaned_id.split(".")
+        if not parts or not parts[0]:
+            return None
+
+        if not validate_track_position(parts):
+            return None
+
+        extensions = parse_field_extensions(parts)
+
+        # Normalize: if field_type was not set by any extension it defaults to parts[0].
+        # In that case, treat the field as plain text (mirrors the full element parser).
+        if extensions["field_type"] not in KNOWN_FIELD_TYPES:
+            extensions["field_type"] = "text"
+
+        default_value = get_default_value(extensions["field_type"], text_content, parts)
+
+        return create_regular_field(
+            base_id=parts[0],
+            element_id=element_id,
+            extensions=extensions,
+            default_value=default_value,
+            url=url,
+            helper_text=None,
+        )
+    except Exception as e:
+        logger.warning(f"[parse_field_from_id] Failed for id='{element_id}': {e}")
+        return None
+
+
+# ============================================================================
 # MAIN PARSER FUNCTION
 # ============================================================================
 
 def parse_svg_to_form_fields(svg_text: str) -> List[Dict[str, Any]]:
+
     """
     Parse SVG text and convert elements with IDs into form field definitions.
     
