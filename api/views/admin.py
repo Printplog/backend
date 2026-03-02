@@ -369,7 +369,6 @@ class AdminDocuments(APIView):
                     'name': doc.name,
                     'test': doc.test,
                     'tracking_id': doc.tracking_id,
-                    'status': doc.status,
                     'created_at': doc.created_at.isoformat(),
                     'updated_at': doc.updated_at.isoformat(),
                     'buyer': {
