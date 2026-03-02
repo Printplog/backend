@@ -7,9 +7,9 @@ VIEWBOX_PATTERN = re.compile(r'viewBox=["\']([^"\']+)["\']')
 WIDTH_PATTERN = re.compile(r'width=["\']([^"\'px]+)')
 HEIGHT_PATTERN = re.compile(r'height=["\']([^"\'px]+)')
 WATERMARK_PATTERN = re.compile(
-    r'<g\s+transform="rotate\([^)]+\)">\s*'
+    r'<g\s+transform="rotate\([^)]+\)"[^>]*>\s*'
     r'<text\s+[^>]*pointer-events="none"[^>]*>'
-    r'TEST DOCUMENT</text>\s*</g>',
+    r'(?:TEST DOCUMENT|FAKE DOCUMENT)</text>\s*</g>',
     re.IGNORECASE | re.DOTALL
 )
 
@@ -77,7 +77,7 @@ class WaterMark():
         avg_dimension = (width + height) / 2
         font_size = max(12, min(60, int(avg_dimension / 15)))  # Font size between 12-60px
         
-        # Estimate text width: "TEST DOCUMENT" is ~13 characters
+        # Estimate text width: "FAKE DOCUMENT" is ~13 characters
         # Approximate width: font_size * 0.65 * character_count
         text_width = font_size * 0.65 * 13  # Approximately 8.45 * font_size
         text_height = font_size * 1.2  # Approximate text height (with line height)
@@ -181,9 +181,9 @@ class WaterMark():
                 
                 if x >= margin_x and x <= width - margin_x and y >= margin_y and y <= height - margin_y:
                     watermark = (
-                        f'<g transform="rotate({angle_degrees}, {x}, {y})">'
-                        f'<text x="{x}" y="{y}" fill="black" font-size="{font_size}" pointer-events="none">'
-                        f'TEST DOCUMENT</text></g>'
+                        f'<g transform="rotate({angle_degrees}, {x}, {y})" pointer-events="none">'
+                        f'<text x="{x}" y="{y}" fill="black" font-size="{font_size}" font-weight="900" font-family="Arial, sans-serif" text-anchor="middle" pointer-events="none">'
+                        f'FAKE DOCUMENT</text></g>'
                     )
                     watermarks.append(watermark)
                     watermark_index += 1
