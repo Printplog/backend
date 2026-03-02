@@ -332,3 +332,70 @@ class AdminUserDetails(APIView):
             return Response({'message': 'User deleted successfully', 'deleted_user': user_info}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': 'Internal server error', 'details': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AdminDocuments(APIView):
+    """Admin-only paginated view of all purchased templates with search."""
+    permission_classes = [IsAdminOrReadOnly]
+
+    def get(self, request):
+        try:
+            page_size = int(request.GET.get('page_size', 20))
+            search = request.GET.get('search', '').strip()
+
+            queryset = (
+                PurchasedTemplate.objects
+                .select_related('buyer', 'template', 'template__tool')
+                .defer('form_fields', 'svg_file')
+                .order_by('-created_at')
+            )
+
+            if search:
+                queryset = queryset.filter(
+                    Q(name__icontains=search) |
+                    Q(buyer__username__icontains=search) |
+                    Q(buyer__email__icontains=search) |
+                    Q(tracking_id__icontains=search) |
+                    Q(template__name__icontains=search)
+                )
+
+            paginator = PageNumberPagination()
+            paginator.page_size = page_size
+            paginated_qs = paginator.paginate_queryset(queryset, request)
+
+            results = [
+                {
+                    'id': str(doc.id),
+                    'name': doc.name,
+                    'test': doc.test,
+                    'tracking_id': doc.tracking_id,
+                    'status': doc.status,
+                    'created_at': doc.created_at.isoformat(),
+                    'updated_at': doc.updated_at.isoformat(),
+                    'buyer': {
+                        'id': doc.buyer.id,
+                        'username': doc.buyer.username,
+                        'email': doc.buyer.email,
+                    } if doc.buyer else None,
+                    'template': {
+                        'id': str(doc.template.id),
+                        'name': doc.template.name,
+                    } if doc.template else None,
+                }
+                for doc in paginated_qs
+            ]
+
+            return Response({
+                'results': results,
+                'count': paginator.page.paginator.count,
+                'total_pages': paginator.page.paginator.num_pages,
+                'current_page': paginator.page.number,
+                'next': paginator.get_next_link(),
+                'previous': paginator.get_previous_link(),
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {'error': 'Internal server error', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

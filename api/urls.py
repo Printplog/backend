@@ -21,5 +21,6 @@ urlpatterns = [
     path("admin/overview/", AdminOverview.as_view(), name="admin-overview"),
     path("admin/users/", AdminUsers.as_view(), name="admin-users"),
     path("admin/users/<int:user_id>/", AdminUserDetails.as_view(), name="admin-user-details"),
+    path("admin/documents/", AdminDocuments.as_view(), name="admin-documents"),
 ]
 urlpatterns += router.urls
