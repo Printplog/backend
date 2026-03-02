@@ -1,6 +1,7 @@
 import re
 import hashlib
 import json
+import math
 from typing import Any, Dict, List, Tuple
 
 from lxml import etree
@@ -76,6 +77,70 @@ def _bool_from_value(value: Any) -> bool:
         return value != 0
     value_str = str(value).strip().lower()
     return value_str in {"true", "1", "yes", "y"}
+
+
+def _normalize_transform(el):
+    """
+    Consolidate transforms from both 'style' and 'transform' attribute.
+    Ensures everything is in the 'transform' attribute for backend engines.
+    """
+    style = el.get("style", "")
+    attr_transform = el.get("transform", "")
+
+    # Simple regex to find transform: ...; in style
+    style_transform_match = re.search(r"transform\s*:\s*([^;]+)", style)
+    if not style_transform_match:
+        return
+
+    style_transform = style_transform_match.group(1).strip()
+
+    # Get element dimensions for center calculation
+    try:
+        x = float(el.get("x", 0))
+        y = float(el.get("y", 0))
+        w = float(el.get("width", 0))
+        h = float(el.get("height", 0))
+    except (ValueError, TypeError):
+        x = y = w = h = 0
+        
+    cx = x + w / 2
+    cy = y + h / 2
+
+    # Convert CSS transforms to SVG attribute format
+    # 1. Convert translate(Xpx, Ypx) to translate(X, Y)
+    normalized = re.sub(r"translate\(([^,)]+)px\s*,\s*([^,)]+)px\)", r"translate(\1, \2)", style_transform)
+    normalized = re.sub(r"translate\(([^,)]+)px\)", r"translate(\1)", normalized)
+
+    # 2. Convert rotate(Xdeg) to rotate(X, cx, cy)
+    # SVG attributes MUST NOT have 'deg' units.
+    has_dimensions = el.get("width") is not None and el.get("height") is not None
+    
+    def rotate_replacer(match):
+        p1 = match.group(1)
+        # Always strip deg
+        angle = p1.replace("deg", "").strip()
+        
+        if "," not in p1 and has_dimensions:
+            return f"rotate({angle}, {cx}, {cy})"
+        
+        # If it has commas or no dimensions, just ensure it's a valid number sequence
+        return f"rotate({angle}{',' + p1.split(',', 1)[1] if ',' in p1 else ''})"
+
+    normalized = re.sub(r"rotate\(([^)]+)\)", rotate_replacer, normalized)
+
+    # Merge them
+    combined = f"{attr_transform} {normalized}".strip()
+    el.set("transform", combined)
+
+    # Clean up style
+    new_style = re.sub(r"transform\s*:\s*[^;]+;?", "", style).strip()
+    new_style = re.sub(r"transform-origin\s*:\s*[^;]+;?", "", new_style).strip()
+    new_style = re.sub(r"transform-box\s*:\s*[^;]+;?", "", new_style).strip()
+
+    if new_style:
+        el.set("style", new_style)
+    else:
+        el.attrib.pop("style", None)
 
 
 def update_svg_from_field_updates(
@@ -200,8 +265,64 @@ def update_svg_from_field_updates(
         field_type = (field.get("type") or "text").lower()
 
         if field_type in {"upload", "file", "sign"}:
+            # Sync transforms so we can apply rotation properly
+            _normalize_transform(el)
+
             if value and isinstance(value, str) and value.strip():
                 el.set("{http://www.w3.org/1999/xlink}href", value)
+                el.set("preserveAspectRatio", "none")
+            
+            # Apply rotation if present
+            rotation_val = field.get("rotation")
+            
+            # Inheritance logic: If this field depends on another field AND has no rotation of its own,
+            # try to inherit the rotation from the parent field.
+            if rotation_val is None and field.get("dependsOn"):
+                base_parent_id = field.get("dependsOn").split('[')[0]
+                parent_field = field_map.get(base_parent_id)
+                if parent_field and parent_field.get("rotation") is not None:
+                    rotation_val = parent_field.get("rotation")
+            
+            if rotation_val is not None:
+                try:
+                    rotation = float(rotation_val)
+                    if math.isnan(rotation):
+                        continue
+                    
+                    x = float(el.get("x", 0))
+                    y = float(el.get("y", 0))
+                    w = float(el.get("width", 0))
+                    h = float(el.get("height", 0))
+                    cx = x + w / 2
+                    cy = y + h / 2
+                    
+                    existing_transform = el.get("transform", "")
+                    base_rotation = 0
+                    
+                    # Parse existing rotation if present. We look for rotate(angle, ...)
+                    rotate_match = re.search(r"rotate\s*\(\s*(-?\d+\.?\d*)", existing_transform)
+                    if rotate_match:
+                        base_rotation = float(rotate_match.group(1))
+                    
+                    # Add user rotation to base rotation
+                    total_rotation = base_rotation + rotation
+                    rotation_str = f"rotate({total_rotation}, {cx}, {cy})" if total_rotation != 0 else ""
+                    
+                    if "rotate(" in existing_transform:
+                        # Replace existing rotation with combined rotation
+                        new_transform = re.sub(r"rotate\([^)]+\)", rotation_str, existing_transform).strip()
+                    elif rotation_str:
+                        # Append new rotation
+                        new_transform = f"{existing_transform} {rotation_str}".strip()
+                    else:
+                        new_transform = existing_transform
+                    
+                    if new_transform:
+                        el.set("transform", new_transform)
+                    else:
+                        el.attrib.pop("transform", None)
+                except (ValueError, TypeError):
+                    pass
         elif field_type == "hide":
             visible = _bool_from_value(value)
             if visible:
