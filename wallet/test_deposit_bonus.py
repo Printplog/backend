@@ -237,3 +237,17 @@ class ExpiryTaskTests(TestCase):
         self.assertEqual(still_active.status, "active")
         self.assertEqual(still_active.amount_remaining, Decimal("20.00"))
         self.assertEqual(self.wallet.bonus_balance, Decimal("20.00"))
+
+
+class WalletSerializerBonusTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="u7", email="u7@t.com", password="x")
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+
+    def test_serializer_includes_bonus_fields(self):
+        from wallet.serializers import WalletSerializer
+        self.wallet.credit_bonus(Decimal("30.00"), expires_at=timezone.now() + timedelta(days=7))
+        self.wallet.refresh_from_db()
+        data = WalletSerializer(self.wallet).data
+        self.assertEqual(Decimal(str(data["bonus_balance"])), Decimal("30.00"))
+        self.assertIsNotNone(data["bonus_expires_at"])
