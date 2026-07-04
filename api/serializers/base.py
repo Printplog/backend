@@ -100,6 +100,8 @@ class PublicSiteSettingsSerializer(serializers.ModelSerializer):
             'dev_name_obfuscated', 'owner_name_obfuscated', 'template_cache_version', 'enable_ai_features',
             'show_whatsapp_on_hover', 'show_community_on_hover', 'show_telegram_on_hover',
             'show_instagram_on_hover', 'show_twitter_on_hover', 'show_tiktok_on_hover',
-            'enable_referrals', 'referral_percentage', 'min_referral_deposit', 'min_withdrawal_threshold'
+            'enable_referrals', 'referral_percentage', 'min_referral_deposit', 'min_withdrawal_threshold',
+            'enable_deposit_promo', 'deposit_promo_min_amount', 'deposit_promo_percentage',
+            'deposit_promo_max_bonus', 'deposit_promo_expiry_days', 'deposit_promo_message'
         ]
         read_only_fields = fields

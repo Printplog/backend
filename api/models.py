@@ -346,6 +346,14 @@ class SiteSettings(models.Model):
     referral_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=10.00, help_text="Percentage of every deposit given to both referrer and invitee (e.g. 10.00)")
     min_referral_deposit = models.DecimalField(max_digits=10, decimal_places=2, default=6.00, help_text="Minimum deposit required by the referred user to trigger reward")
 
+    # ---- Deposit Promo ----
+    enable_deposit_promo = models.BooleanField(default=False, help_text="Enable the deposit bonus promo")
+    deposit_promo_min_amount = models.DecimalField(max_digits=10, decimal_places=2, default=30.00, help_text="Minimum deposit (USD) to qualify for the bonus")
+    deposit_promo_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=100.00, help_text="Bonus percentage of the deposit (e.g. 100.00 = 100%)")
+    deposit_promo_max_bonus = models.DecimalField(max_digits=10, decimal_places=2, default=50.00, help_text="Maximum bonus (USD) granted per deposit")
+    deposit_promo_expiry_days = models.PositiveIntegerField(default=7, help_text="Days until a granted bonus expires (0 = never)")
+    deposit_promo_message = models.TextField(blank=True, default="", help_text="Optional promo copy for the popup/banner (blank = auto-generated)")
+
     # Legacy / Other Fields
     manual_purchase_text = models.TextField(blank=True)
     dev_name_obfuscated = models.TextField(blank=True)
