@@ -1,11 +1,13 @@
 import requests
 import uuid
 from decimal import Decimal
+from datetime import timedelta
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.urls import reverse
+from django.utils import timezone
 
 from wallet.models import Transaction
 from asgiref.sync import async_to_sync
@@ -200,8 +202,24 @@ class CryptAPIWebhookView(APIView):
         tx.wallet.credit(credited_amount, create_transaction=False)
         send_wallet_update(tx.wallet.user, True)
 
-        # Referral Reward Logic
         settings = SiteSettings.get_settings()
+
+        # ---- Deposit Promo Bonus ----
+        if settings.enable_deposit_promo and credited_amount >= settings.deposit_promo_min_amount:
+            raw_bonus = credited_amount * settings.deposit_promo_percentage / Decimal("100")
+            bonus_amount = min(raw_bonus, settings.deposit_promo_max_bonus).quantize(Decimal("0.01"))
+            if bonus_amount > 0:
+                days = settings.deposit_promo_expiry_days
+                expires_at = (timezone.now() + timedelta(days=days)) if days else None
+                tx.wallet.credit_bonus(
+                    bonus_amount,
+                    expires_at=expires_at,
+                    source_transaction=tx,
+                    percentage=settings.deposit_promo_percentage,
+                )
+                send_wallet_update(tx.wallet.user, True)
+
+        # Referral Reward Logic
         user = tx.wallet.user
         if settings.enable_referrals and user.referred_by:
             # Mutual Reward Calculation: (deposit * percentage / 100)

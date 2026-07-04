@@ -122,3 +122,57 @@ class DebitBonusFirstTests(TestCase):
         never_expiring = self.wallet.bonuses.filter(expires_at__isnull=True).first()
         self.assertEqual(never_expiring.status, "active")
         self.assertEqual(never_expiring.amount_remaining, Decimal("15.00"))
+
+
+from decimal import Decimal as D
+from wallet.models import Transaction
+from api.models import SiteSettings
+
+
+def _grant_if_qualifies(wallet, credited_amount, tx):
+    """Mirror of the webhook promo block, used to unit-test the rule."""
+    from api.models import SiteSettings
+    from django.utils import timezone as tz
+    from datetime import timedelta as td
+    s = SiteSettings.get_settings()
+    if s.enable_deposit_promo and credited_amount >= s.deposit_promo_min_amount:
+        raw = (credited_amount * s.deposit_promo_percentage / D("100"))
+        bonus = min(raw, s.deposit_promo_max_bonus).quantize(D("0.01"))
+        if bonus > 0:
+            expires = (tz.now() + td(days=s.deposit_promo_expiry_days)) if s.deposit_promo_expiry_days else None
+            wallet.credit_bonus(bonus, expires_at=expires, source_transaction=tx, percentage=s.deposit_promo_percentage)
+
+
+class WebhookPromoRuleTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="u4", email="u4@t.com", password="x")
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+        self.s = SiteSettings.get_settings()
+        self.s.enable_deposit_promo = True
+        self.s.deposit_promo_min_amount = D("30.00")
+        self.s.deposit_promo_percentage = D("100.00")
+        self.s.deposit_promo_max_bonus = D("50.00")
+        self.s.deposit_promo_expiry_days = 7
+        self.s.save()
+
+    def test_qualifying_deposit_grants_capped_bonus(self):
+        _grant_if_qualifies(self.wallet, D("500.00"), None)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, D("50.00"))  # capped
+
+    def test_exact_percentage_below_cap(self):
+        _grant_if_qualifies(self.wallet, D("30.00"), None)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, D("30.00"))
+
+    def test_below_min_grants_nothing(self):
+        _grant_if_qualifies(self.wallet, D("29.99"), None)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, D("0.00"))
+
+    def test_promo_off_grants_nothing(self):
+        self.s.enable_deposit_promo = False
+        self.s.save()
+        _grant_if_qualifies(self.wallet, D("100.00"), None)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, D("0.00"))
