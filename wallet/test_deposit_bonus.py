@@ -100,3 +100,25 @@ class DebitBonusFirstTests(TestCase):
         self.wallet.refresh_from_db()
         with self.assertRaises(ValidationError):
             self.wallet.debit(Decimal("100.00"))
+
+    def test_bonus_makes_small_balance_sufficient(self):
+        self.wallet.balance = Decimal("5.00")
+        self.wallet.save(update_fields=["balance"])
+        self._bonus("30.00", days=7)
+        self.wallet.refresh_from_db()
+        self.wallet.debit(Decimal("20.00"))
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, Decimal("10.00"))
+        self.assertEqual(self.wallet.balance, Decimal("5.00"))
+
+    def test_never_expiring_bonus_spent_last(self):
+        self.wallet.credit_bonus(Decimal("15.00"), expires_at=None)
+        self._bonus("15.00", days=5)
+        self.wallet.refresh_from_db()
+        self.wallet.debit(Decimal("15.00"))
+        dated = self.wallet.bonuses.filter(expires_at__isnull=False).first()
+        self.assertEqual(dated.status, "spent")
+        self.assertEqual(dated.amount_remaining, Decimal("0.00"))
+        never_expiring = self.wallet.bonuses.filter(expires_at__isnull=True).first()
+        self.assertEqual(never_expiring.status, "active")
+        self.assertEqual(never_expiring.amount_remaining, Decimal("15.00"))
