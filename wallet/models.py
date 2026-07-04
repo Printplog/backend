@@ -46,6 +46,7 @@ class Wallet(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='wallet')
     balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     referral_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    bonus_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
 
     def __str__(self):
         return f"{self.user.username}'s Wallet"
@@ -140,3 +141,32 @@ class WithdrawalRequest(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.amount} ({self.status})"
+
+
+class DepositBonus(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        SPENT = "spent", "Spent"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    wallet = models.ForeignKey("Wallet", on_delete=models.CASCADE, related_name="bonuses")
+    source_transaction = models.ForeignKey(
+        "Transaction", on_delete=models.SET_NULL, null=True, blank=True, related_name="deposit_bonuses"
+    )
+    amount_granted = models.DecimalField(max_digits=12, decimal_places=2)
+    amount_remaining = models.DecimalField(max_digits=12, decimal_places=2)
+    percentage_applied = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
+    granted_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
+
+    class Meta:
+        ordering = ["expires_at", "granted_at"]
+        indexes = [
+            models.Index(fields=["wallet", "status"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"Bonus {self.amount_remaining}/{self.amount_granted} ({self.status})"
