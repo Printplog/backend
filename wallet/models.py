@@ -115,26 +115,51 @@ class Wallet(models.Model):
         return tx_to_return
 
     @transaction.atomic
-    def debit(self, amount: Decimal, *, description=''):
+    def debit(self, amount, *, description=''):
         amount = Decimal(amount)
         if amount <= 0:
             raise ValueError("Debit amount must be positive")
 
-        if self.balance < amount:
+        wallet = Wallet.objects.select_for_update().get(pk=self.pk)
+        if wallet.spendable_balance < amount:
             raise ValidationError("Insufficient wallet balance")
 
-        self.balance -= amount
-        self.save(update_fields=['balance'])
+        remaining = amount
+        bonus_used = Decimal("0.00")
+        active_bonuses = (
+            wallet.bonuses.select_for_update()
+            .filter(status=DepositBonus.Status.ACTIVE, amount_remaining__gt=0)
+            .order_by(models.F("expires_at").asc(nulls_last=True), "granted_at")
+        )
+        for b in active_bonuses:
+            if remaining <= 0:
+                break
+            take = min(b.amount_remaining, remaining)
+            b.amount_remaining = b.amount_remaining - take
+            if b.amount_remaining <= 0:
+                b.status = DepositBonus.Status.SPENT
+            b.save(update_fields=["amount_remaining", "status"])
+            remaining -= take
+            bonus_used += take
+
+        if bonus_used:
+            wallet.bonus_balance = wallet.bonus_balance - bonus_used
+        if remaining > 0:
+            wallet.balance = wallet.balance - remaining
+        wallet.save(update_fields=["balance", "bonus_balance"])
+
+        # keep the caller's instance consistent
+        self.balance = wallet.balance
+        self.bonus_balance = wallet.bonus_balance
 
         tx = Transaction.objects.create(
-            wallet=self,
+            wallet=wallet,
             type=Transaction.Type.PAYMENT,
             amount=-amount,
             status=Transaction.Status.COMPLETED,
-            description=description
+            description=description,
         )
 
-        # Send Payment Email
         try:
             from api.utils.email_service import EmailService
             EmailService.send_payment_notification(self.user, amount, self.balance, tx.tx_id, description)

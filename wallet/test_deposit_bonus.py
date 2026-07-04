@@ -51,3 +51,52 @@ class CreditBonusTests(TestCase):
     def test_credit_bonus_rejects_nonpositive(self):
         with self.assertRaises(ValueError):
             self.wallet.credit_bonus(Decimal("0.00"))
+
+
+from django.core.exceptions import ValidationError
+
+
+class DebitBonusFirstTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="u3", email="u3@t.com", password="x")
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+        self.wallet.balance = Decimal("100.00")
+        self.wallet.save(update_fields=["balance"])
+
+    def _bonus(self, amount, days):
+        return self.wallet.credit_bonus(
+            Decimal(amount), expires_at=timezone.now() + timedelta(days=days)
+        )
+
+    def test_spends_bonus_before_real_balance(self):
+        self._bonus("30.00", days=7)
+        self.wallet.refresh_from_db()
+        self.wallet.debit(Decimal("20.00"), description="buy")
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, Decimal("10.00"))
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+
+    def test_soonest_expiry_consumed_first(self):
+        self._bonus("15.00", days=30)   # later
+        self._bonus("15.00", days=2)    # sooner -> spent first
+        self.wallet.refresh_from_db()
+        self.wallet.debit(Decimal("15.00"))
+        soon = self.wallet.bonuses.order_by("expires_at").first()
+        self.assertEqual(soon.status, "spent")
+        self.assertEqual(soon.amount_remaining, Decimal("0.00"))
+
+    def test_overflow_pulls_from_real_balance(self):
+        self._bonus("30.00", days=7)
+        self.wallet.refresh_from_db()
+        self.wallet.debit(Decimal("50.00"))
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, Decimal("0.00"))
+        self.assertEqual(self.wallet.balance, Decimal("80.00"))  # 100 - (50-30)
+
+    def test_insufficient_combined_raises(self):
+        self._bonus("30.00", days=7)
+        self.wallet.balance = Decimal("5.00")
+        self.wallet.save(update_fields=["balance"])
+        self.wallet.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            self.wallet.debit(Decimal("100.00"))
