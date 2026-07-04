@@ -27,3 +27,27 @@ class DepositBonusModelTests(TestCase):
         )
         self.assertEqual(b.status, "active")
         self.assertEqual(self.wallet.bonuses.count(), 1)
+
+
+class CreditBonusTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="u2", email="u2@t.com", password="x")
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+
+    def test_credit_bonus_creates_record_and_updates_cache(self):
+        b = self.wallet.credit_bonus(Decimal("30.00"), percentage=Decimal("100.00"))
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, Decimal("30.00"))
+        self.assertEqual(b.amount_remaining, Decimal("30.00"))
+        self.assertEqual(b.status, "active")
+
+    def test_spendable_balance_sums_both(self):
+        self.wallet.balance = Decimal("10.00")
+        self.wallet.save(update_fields=["balance"])
+        self.wallet.credit_bonus(Decimal("30.00"))
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.spendable_balance, Decimal("40.00"))
+
+    def test_credit_bonus_rejects_nonpositive(self):
+        with self.assertRaises(ValueError):
+            self.wallet.credit_bonus(Decimal("0.00"))

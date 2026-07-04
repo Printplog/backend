@@ -51,6 +51,28 @@ class Wallet(models.Model):
     def __str__(self):
         return f"{self.user.username}'s Wallet"
 
+    @property
+    def spendable_balance(self):
+        return self.balance + self.bonus_balance
+
+    @transaction.atomic
+    def credit_bonus(self, amount, *, expires_at=None, source_transaction=None, percentage=None):
+        amount = Decimal(amount).quantize(Decimal("0.01"))
+        if amount <= 0:
+            raise ValueError("Bonus amount must be positive")
+        bonus = DepositBonus.objects.create(
+            wallet=self,
+            source_transaction=source_transaction,
+            amount_granted=amount,
+            amount_remaining=amount,
+            percentage_applied=percentage if percentage is not None else Decimal("0.00"),
+            expires_at=expires_at,
+            status=DepositBonus.Status.ACTIVE,
+        )
+        self.bonus_balance = self.bonus_balance + amount
+        self.save(update_fields=["bonus_balance"])
+        return bonus
+
     @transaction.atomic
     def credit_referral(self, amount: Decimal):
         amount = Decimal(amount)
