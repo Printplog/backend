@@ -1,7 +1,7 @@
+import logging
 from decimal import Decimal
 from celery import shared_task
 from django.db import transaction
-from django.db.models import F
 from django.utils import timezone
 from wallet.models import DepositBonus, Wallet
 
@@ -18,10 +18,10 @@ def expire_deposit_bonuses():
     count = 0
     for bonus in due.iterator():
         with transaction.atomic():
+            wallet = Wallet.objects.select_for_update().get(pk=bonus.wallet_id)
             b = DepositBonus.objects.select_for_update().get(pk=bonus.pk)
             if b.status != DepositBonus.Status.ACTIVE:
                 continue
-            wallet = Wallet.objects.select_for_update().get(pk=b.wallet_id)
             remaining = b.amount_remaining
             b.amount_remaining = Decimal("0.00")
             b.status = DepositBonus.Status.EXPIRED
@@ -33,6 +33,6 @@ def expire_deposit_bonuses():
         try:
             from wallet.views import send_wallet_update
             send_wallet_update(wallet.user, False)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.getLogger(__name__).warning("wallet update after bonus expiry failed: %s", e)
     return count

@@ -218,3 +218,22 @@ class ExpiryTaskTests(TestCase):
         expire_deposit_bonuses()
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.bonus_balance, Decimal("30.00"))
+
+    def test_only_expired_bonus_affected_when_active_coexists(self):
+        from wallet.tasks import expire_deposit_bonuses
+        past_due = self.wallet.credit_bonus(Decimal("30.00"))
+        past_due.expires_at = timezone.now() - timedelta(hours=1)
+        past_due.save(update_fields=["expires_at"])
+        still_active = self.wallet.credit_bonus(Decimal("20.00"), expires_at=None)
+
+        expire_deposit_bonuses()
+
+        past_due.refresh_from_db()
+        still_active.refresh_from_db()
+        self.wallet.refresh_from_db()
+
+        self.assertEqual(past_due.status, "expired")
+        self.assertEqual(past_due.amount_remaining, Decimal("0.00"))
+        self.assertEqual(still_active.status, "active")
+        self.assertEqual(still_active.amount_remaining, Decimal("20.00"))
+        self.assertEqual(self.wallet.bonus_balance, Decimal("20.00"))
