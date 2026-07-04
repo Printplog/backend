@@ -19,6 +19,10 @@ app.conf.beat_schedule = {
         "task": "analytics.tasks.snapshot_daily_counters",
         "schedule": crontab(minute=5, hour=0),
     },
+    "wallet-expire-bonuses": {
+        "task": "wallet.tasks.expire_deposit_bonuses",
+        "schedule": crontab(minute=0),  # hourly
+    },
 }
 
 

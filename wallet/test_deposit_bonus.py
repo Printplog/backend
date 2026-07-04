@@ -193,3 +193,28 @@ class SpendIntegrationTests(TestCase):
         self.assertEqual(self.wallet.bonus_balance, Decimal("20.00"))
         self.assertEqual(self.wallet.balance, Decimal("0.00"))
         self.assertEqual(tx.amount, Decimal("-10.00"))
+
+
+class ExpiryTaskTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="u6", email="u6@t.com", password="x")
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+
+    def test_expires_due_bonuses_and_adjusts_cache(self):
+        from wallet.tasks import expire_deposit_bonuses
+        b = self.wallet.credit_bonus(Decimal("30.00"))
+        # force it past-due
+        b.expires_at = timezone.now() - timedelta(hours=1)
+        b.save(update_fields=["expires_at"])
+        n = expire_deposit_bonuses()
+        b.refresh_from_db(); self.wallet.refresh_from_db()
+        self.assertEqual(n, 1)
+        self.assertEqual(b.status, "expired")
+        self.assertEqual(self.wallet.bonus_balance, Decimal("0.00"))
+
+    def test_never_expiring_bonus_untouched(self):
+        from wallet.tasks import expire_deposit_bonuses
+        self.wallet.credit_bonus(Decimal("30.00"), expires_at=None)
+        expire_deposit_bonuses()
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, Decimal("30.00"))
