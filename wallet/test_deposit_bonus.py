@@ -176,3 +176,20 @@ class WebhookPromoRuleTests(TestCase):
         _grant_if_qualifies(self.wallet, D("100.00"), None)
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.bonus_balance, D("0.00"))
+
+
+class SpendIntegrationTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="u5", email="u5@t.com", password="x")
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+
+    def test_can_afford_with_bonus_only(self):
+        self.wallet.credit_bonus(Decimal("30.00"))
+        self.wallet.refresh_from_db()
+        # affordability must use spendable_balance, not balance
+        self.assertGreaterEqual(self.wallet.spendable_balance, Decimal("10.00"))
+        tx = self.wallet.debit(Decimal("10.00"), description="template")
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.bonus_balance, Decimal("20.00"))
+        self.assertEqual(self.wallet.balance, Decimal("0.00"))
+        self.assertEqual(tx.amount, Decimal("-10.00"))

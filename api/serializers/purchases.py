@@ -34,7 +34,7 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
             user = self.context['request'].user
             charge_amount = instance.template.tool.price if instance.template and instance.template.tool else Decimal('5.00')
 
-            if user.wallet.balance < charge_amount:
+            if user.wallet.spendable_balance < charge_amount:
                 raise serializers.ValidationError(f"Insufficient funds. Required: {charge_amount}")
 
             tx = user.wallet.debit(charge_amount, description=f"Watermark removal: {instance.name}")

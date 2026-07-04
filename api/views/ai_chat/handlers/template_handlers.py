@@ -34,9 +34,8 @@ async def handle_purchase_template(args, user):
             tpl = Template.objects.select_related("tool").get(pk=tid)
             if not tpl.tool: return None, "No tool linked"
             wallet, _ = Wallet.objects.get_or_create(user=u)
-            if wallet.balance < tpl.tool.price: return None, "Insufficient balance"
-            wallet.balance -= tpl.tool.price
-            wallet.save()
+            if wallet.spendable_balance < tpl.tool.price: return None, "Insufficient balance"
+            wallet.debit(tpl.tool.price, description=f"Tool purchase: {tpl.tool.name}")
             pt = PurchasedTemplate.objects.create(
                 buyer=u, template=tpl, form_fields=flds, price_paid=tpl.tool.price
             )
