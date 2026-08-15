@@ -64,8 +64,11 @@ COPY . .
 RUN chmod +x docker-entrypoint.sh
 
 # Run collectstatic during build to avoid runtime delays
-# We provide dummy ENV vars to satisfy Django initialization requirements
+# These values exist only in this image layer so Django can initialize while
+# collecting static files. Dokploy must provide separate real runtime secrets.
 RUN SECRET_KEY=build-time-only-9hF3qL7wB2mN6xC8vK4sT1pR5zY0dG9jU3aE7iO2cV6nM8qX \
+    JWT_SIGNING_KEY=build-time-jwt-only-4pZ8vN2cQ7mL1xK6dR9sW3fH5jT0yB4uE8aG2iC6oV1nM7qS \
+    API_KEY_PEPPER=build-time-api-only-7kD3rX9mQ2vL8sH5nT1cW6fB0yP4uE9aJ3iG7oN2zR5xK8dV \
     DEBUG=False \
     DATABASE_URL=sqlite:///:memory: \
     python manage.py collectstatic --noinput
