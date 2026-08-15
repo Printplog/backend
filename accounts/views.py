@@ -1,25 +1,114 @@
 # accounts/views.py
-from dj_rest_auth.views import LoginView as BaseLoginView, LogoutView as BaseLogoutView
+from dj_rest_auth.views import LoginView as BaseLoginView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.http import JsonResponse
 from django.contrib.auth import logout as django_logout
+from django.contrib.auth import get_user_model
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, viewsets
+from rest_framework import status
 from django.conf import settings
 from .authentication import enforce_csrf_for_request
 from django.middleware.csrf import get_token
 from .serializers import *
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
-from django.shortcuts import get_object_or_404
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.core.mail import send_mail
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
-from django.views import View
-from django.http import JsonResponse
-from django.conf import settings
+import time
+from .two_factor import (
+    TwoFactorChallengeError,
+    clear_challenge_cookie,
+    consume_challenge,
+    create_challenge,
+    decrypt_secret,
+    enroll_user,
+    ensure_pending_secret,
+    is_enabled_for_user,
+    is_privileged_user,
+    load_challenge,
+    profile_for_user,
+    provisioning_uri,
+    register_failed_attempt,
+    set_challenge_cookie,
+    verify_user_code,
+)
+
+
+User = get_user_model()
+
+
+def _jwt_cookie_settings():
+    cookie_settings = {
+        'httponly': settings.JWT_COOKIE_HTTPONLY,
+        'secure': settings.JWT_COOKIE_SECURE,
+        'samesite': settings.JWT_COOKIE_SAMESITE,
+        'path': settings.JWT_COOKIE_PATH,
+        'max_age': 2 * 24 * 60 * 60,
+    }
+    if getattr(settings, 'JWT_COOKIE_DOMAIN', None):
+        cookie_settings['domain'] = settings.JWT_COOKIE_DOMAIN
+    return cookie_settings
+
+
+def _clear_auth_cookies(response):
+    cookie_options = {
+        'path': settings.JWT_COOKIE_PATH,
+        'samesite': settings.JWT_COOKIE_SAMESITE,
+    }
+    if getattr(settings, 'JWT_COOKIE_DOMAIN', None):
+        cookie_options['domain'] = settings.JWT_COOKIE_DOMAIN
+    response.delete_cookie('access_token', **cookie_options)
+    response.delete_cookie('refresh_token', **cookie_options)
+
+
+def _notify_login(user, request):
+    ip = request.META.get('REMOTE_ADDR')
+    user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown')
+    from api.utils.email_service import EmailService
+    EmailService.send_login_notification(user, ip, user_agent)
+
+
+def _authenticated_response(user, request, *, admin_mfa=False, recovery_codes=None, notify=True):
+    refresh = RefreshToken.for_user(user)
+    if admin_mfa:
+        refresh['admin_mfa'] = True
+        refresh['amr'] = ['password', 'otp']
+
+    payload = dict(CustomUserDetailsSerializer(user, many=False).data)
+    if recovery_codes:
+        payload['recovery_codes'] = recovery_codes
+
+    response = JsonResponse(payload)
+    cookie_settings = _jwt_cookie_settings()
+    response.set_cookie('access_token', str(refresh.access_token), **cookie_settings)
+    response.set_cookie('refresh_token', str(refresh), **cookie_settings)
+    response['Cache-Control'] = 'no-store'
+    if notify:
+        _notify_login(user, request)
+    return response
+
+
+def _admin_challenge_response(user, request):
+    token = create_challenge(user, request)
+    response = JsonResponse({
+        'requires_two_factor': True,
+        'setup_required': not is_enabled_for_user(user),
+        'detail': 'Admin verification required.',
+    })
+    _clear_auth_cookies(response)
+    set_challenge_cookie(response, token)
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+def _challenge_error_response(message, *, clear_cookie=False):
+    response = Response({'detail': message}, status=status.HTTP_400_BAD_REQUEST)
+    response['Cache-Control'] = 'no-store'
+    if clear_cookie:
+        clear_challenge_cookie(response)
+    return response
 
 
 class RegisterView(APIView):
@@ -63,59 +152,94 @@ class LoginView(BaseLoginView):
         return super().post(request, *args, **kwargs)
 
     def get_response(self): # type: ignore
-        super().get_response()  # This sets the cookies or does other side-effects if needed
-
         if not self.user:
             return JsonResponse({'error': 'Authentication failed'}, status=401)
 
-        refresh = RefreshToken.for_user(self.user)
-        access_token = str(refresh.access_token)
-        refresh_token = str(refresh)
+        if is_privileged_user(self.user):
+            return _admin_challenge_response(self.user, self.request)
 
-        # Serialize user data
-        user = CustomUserDetailsSerializer(self.user, many=False)
+        super().get_response()
+        return _authenticated_response(self.user, self.request)
 
-        # Get cookie settings from settings.py
-        max_age = 2 * 24 * 60 * 60  # 2 days in seconds
-        cookie_settings = {
-            'httponly': settings.JWT_COOKIE_HTTPONLY,
-            'secure': settings.JWT_COOKIE_SECURE,
-            'samesite': settings.JWT_COOKIE_SAMESITE,
-            'path': settings.JWT_COOKIE_PATH,
-            'max_age': max_age,
-        }
 
-        if hasattr(settings, 'JWT_COOKIE_DOMAIN') and settings.JWT_COOKIE_DOMAIN:
-            cookie_settings['domain'] = settings.JWT_COOKIE_DOMAIN
+class AdminTwoFactorSetupView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'admin_2fa'
 
-        # Set access token cookie
-        response = JsonResponse(user.data)
-        response.set_cookie(
-            key='access_token',
-            value=access_token,
-            **cookie_settings
-        )
+    def post(self, request):
+        enforce_csrf_for_request(request)
+        try:
+            challenge = load_challenge(request)
+            user = User.objects.get(pk=challenge.user_id, is_active=True)
+        except (TwoFactorChallengeError, User.DoesNotExist) as exc:
+            return _challenge_error_response(str(exc), clear_cookie=True)
 
-        # Set refresh token cookie
-        response.set_cookie(
-            key='refresh_token',
-            value=refresh_token,
-            **cookie_settings
-        )
+        if not is_privileged_user(user):
+            consume_challenge(challenge)
+            return _challenge_error_response('This verification session is no longer valid.', clear_cookie=True)
+        if profile_for_user(user):
+            return _challenge_error_response('Two-factor authentication is already configured.')
 
-        # Get IP and User-Agent for login alert
-        x_forwarded_for = self.request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
+        challenge, secret = ensure_pending_secret(challenge)
+        response = Response({
+            'provisioning_uri': provisioning_uri(user, secret),
+            'manual_key': secret,
+            'issuer': settings.ADMIN_2FA_ISSUER,
+            'expires_in': max(0, challenge.expires_at - int(time.time())),
+        })
+        response['Cache-Control'] = 'no-store'
+        return response
+
+
+class AdminTwoFactorVerifyView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'admin_2fa'
+
+    def post(self, request):
+        enforce_csrf_for_request(request)
+        code = str(request.data.get('code', '')).strip()
+        if not code:
+            return _challenge_error_response('Enter your authenticator or recovery code.')
+
+        try:
+            challenge = load_challenge(request)
+            user = User.objects.get(pk=challenge.user_id, is_active=True)
+        except (TwoFactorChallengeError, User.DoesNotExist) as exc:
+            return _challenge_error_response(str(exc), clear_cookie=True)
+
+        if not is_privileged_user(user):
+            consume_challenge(challenge)
+            return _challenge_error_response('This verification session is no longer valid.', clear_cookie=True)
+
+        recovery_codes = None
+        profile = profile_for_user(user)
+        if profile:
+            verified = verify_user_code(user, code)
+        elif challenge.pending_secret:
+            recovery_codes = enroll_user(user, decrypt_secret(challenge.pending_secret), code)
+            verified = recovery_codes is not None
         else:
-            ip = self.request.META.get('REMOTE_ADDR')
-        
-        user_agent = self.request.META.get('HTTP_USER_AGENT', 'Unknown')
+            return _challenge_error_response('Set up your authenticator before verifying.')
 
-        # Send Login notification
-        from api.utils.email_service import EmailService
-        EmailService.send_login_notification(self.user, ip, user_agent)
+        if not verified:
+            try:
+                register_failed_attempt(challenge)
+            except TwoFactorChallengeError as exc:
+                return _challenge_error_response(str(exc), clear_cookie=True)
+            return _challenge_error_response('That code is incorrect or has already been used.')
 
+        consume_challenge(challenge)
+        response = _authenticated_response(
+            user,
+            request,
+            admin_mfa=True,
+            recovery_codes=recovery_codes,
+        )
+        clear_challenge_cookie(response)
         return response
 
 class ForgotPasswordView(APIView):
@@ -219,12 +343,18 @@ class GoogleAuthView(APIView):
         google_id = idinfo.get('sub')
         email = idinfo.get('email', '')
 
-        if not google_id or not email:
+        if not google_id or not email or idinfo.get('email_verified') is not True:
             return Response({'error': 'Invalid Google token'}, status=status.HTTP_400_BAD_REQUEST)
 
         user = User.objects.filter(google_id=google_id).first()
         if not user:
-            user = User.objects.filter(email=email).first()
+            email_user = User.objects.filter(email=email).first()
+            if email_user and is_privileged_user(email_user):
+                return Response(
+                    {'error': 'Privileged accounts must use their password to sign in.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            user = email_user
 
         if not user:
             # New user — derive a unique username from their email
@@ -260,27 +390,9 @@ class GoogleAuthView(APIView):
             user.google_id = google_id
             user.save(update_fields=['google_id'])
 
-        refresh = RefreshToken.for_user(user)
-        access_token = str(refresh.access_token)
-        refresh_token_str = str(refresh)
-
-        user_data = CustomUserDetailsSerializer(user, many=False)
-
-        max_age = 2 * 24 * 60 * 60
-        cookie_settings = {
-            'httponly': settings.JWT_COOKIE_HTTPONLY,
-            'secure': settings.JWT_COOKIE_SECURE,
-            'samesite': settings.JWT_COOKIE_SAMESITE,
-            'path': settings.JWT_COOKIE_PATH,
-            'max_age': max_age,
-        }
-        if hasattr(settings, 'JWT_COOKIE_DOMAIN') and settings.JWT_COOKIE_DOMAIN:
-            cookie_settings['domain'] = settings.JWT_COOKIE_DOMAIN
-
-        response = JsonResponse(user_data.data)
-        response.set_cookie(key='access_token', value=access_token, **cookie_settings)
-        response.set_cookie(key='refresh_token', value=refresh_token_str, **cookie_settings)
-        return response
+        if is_privileged_user(user):
+            return _admin_challenge_response(user, request)
+        return _authenticated_response(user, request, notify=False)
 
 
 class RefreshTokenView(APIView):
@@ -301,25 +413,21 @@ class RefreshTokenView(APIView):
 
         try:
             refresh = RefreshToken(refresh_token)
+            user = User.objects.filter(pk=refresh.get('user_id'), is_active=True).first()
+            if not user:
+                raise ValueError('Unknown user')
+            if is_privileged_user(user):
+                if refresh.get('admin_mfa') is not True or not is_enabled_for_user(user):
+                    raise ValueError('Admin two-factor verification required')
             new_access_token = str(refresh.access_token)
-        except Exception as e:
+        except Exception:
             return Response(
                 {"detail": "Invalid or expired refresh token"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
         # Get cookie settings from settings.py (same as LoginView)
-        max_age = 2 * 24 * 60 * 60  # 2 days in seconds
-        cookie_settings = {
-            'httponly': settings.JWT_COOKIE_HTTPONLY,
-            'secure': settings.JWT_COOKIE_SECURE,
-            'samesite': settings.JWT_COOKIE_SAMESITE,
-            'path': settings.JWT_COOKIE_PATH,
-            'max_age': max_age,
-        }
-
-        if hasattr(settings, 'JWT_COOKIE_DOMAIN') and settings.JWT_COOKIE_DOMAIN:
-            cookie_settings['domain'] = settings.JWT_COOKIE_DOMAIN
+        cookie_settings = _jwt_cookie_settings()
 
         response = JsonResponse({
             "detail": "Access token refreshed",

@@ -20,6 +20,7 @@ charset-normalizer==3.4.2
 click==8.2.1
 constantly==23.10.4
 cryptography==45.0.4
+pyotp==2.10.0
 cssselect2==0.8.0
 daphne==4.2.0
 defusedxml==0.7.1

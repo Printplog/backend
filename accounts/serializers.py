@@ -223,15 +223,10 @@ class LoginSerializer(serializers.Serializer):
                 if user_obj:
                     username = user_obj.username
 
-            print(f"[LOGIN-DEBUG] Incoming login attempt. username: '{username}' (raw: '{data.get('username')}')")
             user = authenticate(request=self.context.get("request"), username=username, password=password)
             if not user:
-                print(f"[LOGIN-DEBUG] Authentication failed for username: '{username}'")
                 raise serializers.ValidationError({"error": ("Invalid credentials")})
-            else:
-                print(f"[LOGIN-DEBUG] Authentication succeeded for username: '{username}'")
         else:
-            print("[LOGIN-DEBUG] Missing username or password in request data")
             raise serializers.ValidationError({"error": ("Both username and password are required")})
 
         data["user"] = user

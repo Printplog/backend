@@ -6,6 +6,8 @@ from .views import *
 urlpatterns = [
     path('csrf/', CsrfTokenView.as_view(), name='csrf-token'),
     path('login/', LoginView.as_view()),
+    path('two-factor/setup/', AdminTwoFactorSetupView.as_view(), name='admin-two-factor-setup'),
+    path('two-factor/verify/', AdminTwoFactorVerifyView.as_view(), name='admin-two-factor-verify'),
     path('logout/', LogoutView.as_view()),
     path('refresh-token/', RefreshTokenView.as_view(), name='token_refresh'),
     path('register/', RegisterView.as_view()),

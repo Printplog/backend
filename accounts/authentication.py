@@ -14,6 +14,7 @@ from django.contrib.auth.models import AnonymousUser
 from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
 from analytics.utils import is_bot_user_agent
+from .two_factor import is_enabled_for_user, is_privileged_user
 
 # Short-lived cache for resolved WS-auth users.
 # A reconnect storm of 10 attempts on the same access_token now costs 1 DB hit
@@ -44,6 +45,10 @@ class JWTAuthenticationFromCookies(JWTAuthentication):
 
         if not user or not user.is_active:
             raise AuthenticationFailed(_('User is inactive or deleted.'))
+
+        if is_privileged_user(user):
+            if validated_token.get('admin_mfa') is not True or not is_enabled_for_user(user):
+                raise AuthenticationFailed(_('Admin two-factor authentication required.'))
 
         if request.method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
             enforce_csrf_for_request(request)
@@ -104,6 +109,10 @@ def get_user_from_jwt_cookie(scope):
         validated_token = auth.get_validated_token(access_token)
         user = auth.get_user(validated_token)
         if user and user.is_active:
+            if is_privileged_user(user):
+                if validated_token.get('admin_mfa') is not True or not is_enabled_for_user(user):
+                    cache.set(cache_key, _WS_AUTH_SENTINEL_ANON, timeout=WS_AUTH_CACHE_TTL)
+                    return AnonymousUser()
             cache.set(cache_key, user.pk, timeout=WS_AUTH_CACHE_TTL)
             return user
         cache.set(cache_key, _WS_AUTH_SENTINEL_ANON, timeout=WS_AUTH_CACHE_TTL)

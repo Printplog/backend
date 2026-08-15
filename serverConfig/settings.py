@@ -71,6 +71,10 @@ DB_CONNECT_TIMEOUT = env_int("DB_CONNECT_TIMEOUT", 10)
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-+#ds1yk1fdrx$=3&yf+!q$r9sy!l$vjl8ea@_fhya_t3(okl!p')
 API_KEY_PEPPER = os.getenv("API_KEY_PEPPER", "" if IS_PRODUCTION else SECRET_KEY)
+ADMIN_2FA_ENCRYPTION_KEY = os.getenv("ADMIN_2FA_ENCRYPTION_KEY", SECRET_KEY)
+ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "SharpToolz Admin")
+ADMIN_2FA_CHALLENGE_SECONDS = env_int("ADMIN_2FA_CHALLENGE_SECONDS", 600)
+ADMIN_2FA_MAX_ATTEMPTS = env_int("ADMIN_2FA_MAX_ATTEMPTS", 5)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "False") == "True" if IS_PRODUCTION else True
@@ -424,6 +428,7 @@ REST_FRAMEWORK = {
         'wallet_write':  os.getenv('THROTTLE_WALLET_WRITE',  '20/min' if IS_PRODUCTION else '120/min'),
         'analytics_ingest': os.getenv('THROTTLE_ANALYTICS_INGEST', '120/min' if IS_PRODUCTION else '1000/min'),
         'admin_read':    os.getenv('THROTTLE_ADMIN_READ',    '600/min' if IS_PRODUCTION else '2000/min'),
+        'admin_2fa':     os.getenv('THROTTLE_ADMIN_2FA',     '10/min' if IS_PRODUCTION else '120/min'),
     },
 }
 
@@ -605,8 +610,9 @@ if IS_PRODUCTION:
         or signing_key == "your-secret-key-here"
     )
     weak_api_pepper = len(API_KEY_PEPPER) < 50 or len(set(API_KEY_PEPPER)) < 8
-    if weak_secret or weak_signing_key or weak_api_pepper:
-        raise RuntimeError("SECRET_KEY, JWT_SIGNING_KEY, and API_KEY_PEPPER must be strong production secrets")
+    weak_admin_2fa_key = len(ADMIN_2FA_ENCRYPTION_KEY) < 50 or len(set(ADMIN_2FA_ENCRYPTION_KEY)) < 8
+    if weak_secret or weak_signing_key or weak_api_pepper or weak_admin_2fa_key:
+        raise RuntimeError("SECRET_KEY, JWT_SIGNING_KEY, API_KEY_PEPPER, and ADMIN_2FA_ENCRYPTION_KEY must be strong production secrets")
 
 SITE_ID = 1
 

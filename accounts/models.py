@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.conf import settings
 
 
 class UserManager(BaseUserManager):
@@ -54,3 +55,26 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.username
+
+
+class AdminTwoFactorProfile(models.Model):
+    """Encrypted authenticator-app configuration for privileged accounts."""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="admin_two_factor",
+    )
+    encrypted_secret = models.TextField()
+    recovery_code_hashes = models.JSONField(default=list, blank=True)
+    confirmed_at = models.DateTimeField()
+    last_used_counter = models.BigIntegerField(default=-1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "admin two-factor profile"
+        verbose_name_plural = "admin two-factor profiles"
+
+    def __str__(self):
+        return f"2FA for {self.user.username}"
