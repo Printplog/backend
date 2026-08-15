@@ -93,6 +93,8 @@ class AdminOverview(APIView):
             'staff_users': serializer.get_staff_users(),
             'total_purchased_docs': serializer.get_total_purchased_docs(),
             'total_wallet_balance': serializer.get_total_wallet_balance() if request.user.is_superuser else None,
+            'external_users': serializer.get_external_users(),
+            'active_external_users': serializer.get_active_external_users(start_datetime),
             'documents_chart': documents_chart,
             'revenue_chart': revenue_chart,
         }
@@ -137,11 +139,22 @@ class AdminUsers(APIView):
             elif role == 'user':
                 users_queryset = users_queryset.filter(is_staff=False, is_superuser=False)
 
+            days_param = request.GET.get('days')
+            date_str = request.GET.get('date')
             start_datetime, end_datetime, range_label, days = get_admin_date_range(
-                days_param=request.GET.get('days'),
-                date_str=request.GET.get('date')
+                days_param=days_param,
+                date_str=date_str
             )
-            
+
+            # Only restrict the table when a range was explicitly requested.
+            # get_admin_date_range defaults to a 1-day window, so applying it
+            # unconditionally would hide every user who didn't join today.
+            range_selected = bool(days_param or date_str)
+            if range_selected:
+                users_queryset = users_queryset.filter(
+                    date_joined__range=(start_datetime, end_datetime)
+                )
+
             # Statistics (recalculated on every request)
             today = timezone.localdate()
             intervals = {
@@ -165,7 +178,7 @@ class AdminUsers(APIView):
             staff_users_count = User.objects.filter(is_staff=True).count() + User.objects.filter(is_superuser=True, is_staff=False).count()
 
             stats_data = {
-                'all_users': users_queryset.count() if search or role != 'all' else User.objects.count(),
+                'all_users': users_queryset.count() if (search or role != 'all' or range_selected) else User.objects.count(),
                 'regular_users': regular_users_count,
                 'staff_users': staff_users_count,
                 'new_users': new_users,

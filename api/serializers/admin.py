@@ -17,6 +17,8 @@ class AdminOverviewSerializer(serializers.Serializer):
     staff_users = serializers.IntegerField()
     total_purchased_docs = serializers.IntegerField()
     total_wallet_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
+    external_users = serializers.IntegerField()
+    active_external_users = serializers.IntegerField()
 
     def get_total_downloads(self):
         """Get total downloads across all users"""
@@ -42,6 +44,47 @@ class AdminOverviewSerializer(serializers.Serializer):
         return PurchasedTemplate.objects.filter(
             test=False
         ).count()
+
+    def _external_user_pairs(self, since=None):
+        """
+        End users belong to the API customer that owns them — `external_user_id`
+        is only opaque and unique within one customer, so "user_42" from two
+        customers is two different people. Identity is therefore the
+        (customer, external_user_id) pair, never the id on its own.
+
+        Counted across both documents and embed sessions, so an end user who
+        opened a hosted form without finishing a document still counts.
+        """
+        from ..models import EmbedSession, PurchasedTemplate
+
+        documents = (
+            PurchasedTemplate.objects
+            .exclude(external_user_id="")
+            .values_list("buyer_id", "external_user_id")
+            .order_by()
+        )
+        sessions = (
+            EmbedSession.objects
+            .exclude(external_user_id="")
+            .values_list("user_id", "external_user_id")
+            .order_by()
+        )
+
+        if since is not None:
+            documents = documents.filter(created_at__gte=since)
+            sessions = sessions.filter(created_at__gte=since)
+
+        # union() is DISTINCT by default, so de-duplication happens in the
+        # database rather than by pulling every pair into memory.
+        return documents.union(sessions)
+
+    def get_external_users(self):
+        """Distinct end users API customers have brought in, all time."""
+        return self._external_user_pairs().count()
+
+    def get_active_external_users(self, since):
+        """Distinct end users seen since `since`."""
+        return self._external_user_pairs(since=since).count()
 
     def get_total_wallet_balance(self):
         """Get total wallet balance for regular users only (excludes admin/staff)"""
