@@ -84,3 +84,34 @@ def cleanup_expired_document_renders() -> int:
     for job in expired.iterator():
         job.delete()
     return count
+
+
+@shared_task(
+    bind=True,
+    name="api.tasks.send_email",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=30,
+    time_limit=45,
+)
+def send_email(self, subject, template_name, context, recipient_list):
+    """
+    Deliver one transactional email off the request path.
+
+    Kept deliberately dumb: it receives only JSON-serialisable values and does
+    the template render itself, so a queued email never depends on objects that
+    may have changed (or vanished) between enqueue and delivery.
+    """
+    from api.utils.email_service import EmailService
+
+    try:
+        EmailService.deliver(subject, template_name, context, recipient_list)
+    finally:
+        close_old_connections()
+
+    return {"subject": subject, "recipients": len(recipient_list)}

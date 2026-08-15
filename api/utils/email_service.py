@@ -1,5 +1,6 @@
 import logging
 from django.core.mail import EmailMultiAlternatives
+from django.db import transaction
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from django.conf import settings
@@ -8,39 +9,75 @@ from api.models import SiteSettings
 
 logger = logging.getLogger(__name__)
 
+
 class EmailService:
+    """
+    Every send is queued rather than performed inline.
+
+    SMTP costs well over a second per message — a fresh connection, TLS
+    handshake and auth each time — which used to be charged directly to
+    whichever request triggered it, login included.
+    """
+
+    @staticmethod
+    def deliver(subject, template_name, context, recipient_list):
+        """
+        Actually render and transmit. Called by the Celery worker, or inline as
+        a last resort when the broker is unreachable.
+
+        Raises on failure so the task's retry/backoff can do its job.
+        """
+        site_settings = SiteSettings.get_settings()
+        full_context = {
+            **context,
+            'current_year': timezone.now().year,
+            'support_email': site_settings.support_email or settings.DEFAULT_FROM_EMAIL,
+            'site_settings': site_settings,
+            'frontend_url': settings.FRONTEND_URL,
+        }
+
+        html_content = render_to_string(template_name, full_context)
+        text_content = strip_tags(html_content)
+
+        msg = EmailMultiAlternatives(
+            subject=subject,
+            body=text_content,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=recipient_list,
+        )
+        msg.attach_alternative(html_content, "text/html")
+        msg.send()
+        return True
+
     @staticmethod
     def _send_email(subject, template_name, context, recipient_list):
         """
-        Internal Helper to send HTML/Text emails.
+        Queue an email. Returns whether it was accepted for delivery, not
+        whether it arrived — delivery happens later, on the worker.
         """
-        try:
-            # Add global context
-            site_settings = SiteSettings.get_settings()
-            context.update({
-                'current_year': timezone.now().year,
-                'support_email': site_settings.support_email or settings.DEFAULT_FROM_EMAIL,
-                'site_settings': site_settings,
-                'frontend_url': settings.FRONTEND_URL,
-            })
-
-            # Render HTML content
-            html_content = render_to_string(template_name, context)
-            # Create plain text version
-            text_content = strip_tags(html_content)
-
-            msg = EmailMultiAlternatives(
-                subject=subject,
-                body=text_content,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                to=recipient_list
-            )
-            msg.attach_alternative(html_content, "text/html")
-            msg.send()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send email '{subject}' to {recipient_list}: {str(e)}")
+        recipients = [address for address in recipient_list if address]
+        if not recipients:
+            logger.warning("Skipping email %r: no recipients", subject)
             return False
+
+        def enqueue():
+            from api.tasks import send_email
+
+            try:
+                send_email.delay(subject, template_name, context, recipients)
+            except Exception:
+                # Broker down. Better a slow request than a lost password reset.
+                logger.exception("Could not queue email %r; sending inline", subject)
+                try:
+                    EmailService.deliver(subject, template_name, context, recipients)
+                except Exception:
+                    logger.exception("Inline send of %r to %s failed", subject, recipients)
+
+        # Outside a transaction this runs immediately; inside one it waits for
+        # COMMIT. That is what stops a rolled-back wallet credit from leaving a
+        # "wallet funded" email behind it.
+        transaction.on_commit(enqueue)
+        return True
 
     @classmethod
     def send_password_reset(cls, email, reset_url):

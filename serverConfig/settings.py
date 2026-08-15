@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 from datetime import timedelta
 import os
+import sys
 from dotenv import load_dotenv
 import dj_database_url
 import sentry_sdk
@@ -462,6 +463,12 @@ CELERY_TASK_TIME_LIMIT = 60
 CELERY_TASK_SOFT_TIME_LIMIT = 45
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
+# Run tasks inline under the test runner so the suite never needs a live broker.
+TESTING = "test" in sys.argv
+if TESTING:
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = False
+
 # Rate-limit cache (django-ratelimit reads from default cache)
 RATELIMIT_USE_CACHE = "default"
 RATELIMIT_ENABLE = os.getenv("RATELIMIT_ENABLE", "True") == "True"
@@ -636,6 +643,13 @@ EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
 EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'False') == 'True'
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+# Django defaults to no timeout, which lets a wedged mail server hold a worker
+# open indefinitely. Bound every SMTP conversation instead.
+EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', 10))
+
+# Defined after the block above so it wins over the SMTP backend.
+if TESTING:
+    EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
 # Security Settings
 SECURITY_CODE = os.getenv('SECURITY_CODE', '123456')

@@ -20,16 +20,17 @@ class ContactView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Send email
-        success = EmailService.send_contact_form(name, email, subject, message)
+        # Queued, not delivered — `accepted` says we took ownership of it, and
+        # the worker retries on failure rather than making the sender re-type.
+        accepted = EmailService.send_contact_form(name, email, subject, message)
 
-        if success:
+        if accepted:
             return Response(
-                {"message": "Your message has been sent successfully."}, 
+                {"message": "Your message has been sent successfully."},
                 status=status.HTTP_200_OK
             )
         else:
             return Response(
-                {"error": "Failed to send message. Please try again later."}, 
+                {"error": "Failed to send message. Please try again later."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

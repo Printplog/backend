@@ -126,12 +126,14 @@ class ReferralViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Anti-spam: Basic rate limiting could be added here (e.g., once per day)
         # For now, we'll just send to all pending users
+        # Each of these is queued, so N reminders no longer means N sequential
+        # SMTP round-trips held open by this request.
         count = 0
         for friend in pending_users:
             if EmailService.send_referral_reminder(friend.email, friend.username, user.username):
                 count += 1
 
-        return Response({"detail": f"Reminder emails sent to {count} friends!"}, status=status.HTTP_200_OK)
+        return Response({"detail": f"Reminders are on their way to {count} friends!"}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny])
     def leaderboard(self, request):
