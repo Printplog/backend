@@ -103,7 +103,13 @@ def apply_svg_patches(svg_content, patches):
 
     try:
         # Parse SVG
-        parser = etree.XMLParser(recover=True, remove_blank_text=True, huge_tree=True)
+        parser = etree.XMLParser(
+            resolve_entities=False,
+            no_network=True,
+            recover=False,
+            remove_blank_text=True,
+            huge_tree=False,
+        )
         svg_tree = etree.fromstring(svg_content.encode('utf-8'), parser=parser)
         
         # Register namespaces

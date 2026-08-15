@@ -19,8 +19,10 @@ from django.urls import path, include
 from django.conf import settings
 
 from analytics.views import LogVisitView
+from serverConfig.views import api_docs_redirect
 
 urlpatterns = [
+    path('api/v1/docs', api_docs_redirect, name='v1-api-docs'),
     path('admin/', admin.site.urls),
     path('api/accounts/',include("accounts.urls")),
     path('api/',include("api.urls")),

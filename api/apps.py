@@ -7,6 +7,7 @@ class ApiConfig(AppConfig):
 
     def ready(self):
         import api.signals
+        import api.schema  # register OpenAPI authentication extensions
         import os
         from django.conf import settings
         

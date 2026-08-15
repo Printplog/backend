@@ -4,7 +4,7 @@
 # ------------------------------------------------------------------------------
 
 # -- Stage 1: Build deps --
-FROM python:3.11-slim-bullseye AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -30,15 +30,16 @@ RUN poetry lock && poetry install --no-root && rm -rf $POETRY_CACHE_DIR
 
 
 # -- Stage 2: Runtime --
-FROM python:3.11-slim-bullseye AS runtime
+FROM python:3.11-slim-bookworm AS runtime
 
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app" \
     PYTHONUNBUFFERED=1 \
-    CELERY_CONCURRENCY=4 \
+    CELERY_CONCURRENCY=2 \
     CELERY_LOGLEVEL=info \
-    CELERY_QUEUES=celery
+    CELERY_QUEUES=celery \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
@@ -54,7 +55,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv
+RUN mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" \
+    && playwright install --with-deps chromium \
+    && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH" \
+    && rm -rf /var/lib/apt/lists/*
 COPY . .
+
+# Render attacker-influenced documents without root privileges. Object-storage
+# deployments do not need local persistence; filesystem deployments must mount
+# their shared media volume with uid/gid 10001 write access.
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app/media /app/temp_uploads \
+    && chown -R appuser:appuser /app/media /app/temp_uploads
+USER appuser
 
 # Worker health = can it reach the broker and respond to ping?
 # Node name MUST match the -n below (worker@%h) — pinging celery@ never replies.

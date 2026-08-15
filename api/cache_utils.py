@@ -15,7 +15,7 @@ def get_cache_key(prefix, **kwargs):
         if value is not None:
             key_parts.append(f"{key}:{value}")
     key_string = "_".join(key_parts)
-    return hashlib.md5(key_string.encode()).hexdigest()
+    return hashlib.sha256(key_string.encode()).hexdigest()
 
 
 def cache_template_list(timeout=300):

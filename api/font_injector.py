@@ -122,10 +122,11 @@ def inject_fonts_into_svg(svg_content: str, fonts: List[Font], base_url: Optiona
     
     # Create cache key from SVG content hash and font IDs
     # This allows us to cache font-injected SVGs to avoid reprocessing
-    svg_hash = hashlib.md5(svg_content.encode('utf-8')).hexdigest()
+    svg_hash = hashlib.sha256(svg_content.encode('utf-8')).hexdigest()
     font_ids = sorted([str(font.id) for font in fonts])
     font_ids_str = '_'.join(font_ids)
-    cache_key = f"svg_fonts_{svg_hash}_{hashlib.md5(font_ids_str.encode('utf-8')).hexdigest()}_{embed_base64}"
+    font_ids_hash = hashlib.sha256(font_ids_str.encode('utf-8')).hexdigest()
+    cache_key = f"svg_fonts_{svg_hash}_{font_ids_hash}_{embed_base64}"
     
     # Try to get from cache (cache for 1 hour)
     cached_result = cache.get(cache_key)

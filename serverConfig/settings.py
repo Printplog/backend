@@ -16,6 +16,7 @@ import os
 from dotenv import load_dotenv
 import dj_database_url
 import sentry_sdk
+from corsheaders.defaults import default_headers
 from sentry_sdk.integrations.django import DjangoIntegration
 
 # Initialize Sentry
@@ -25,8 +26,10 @@ sentry_sdk.init(
     # Set traces_sample_rate to 1.0 to capture 100%
     # of transactions for performance monitoring.
     traces_sample_rate=1.0,
-    # If you wish to associate users to errors (optional)
-    send_default_pii=True,
+    # API keys, embed tokens, document values and customer cookies must never be
+    # copied into an external error tracker.
+    send_default_pii=False,
+    max_request_body_size="never",
 )
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -46,6 +49,17 @@ def env_int(name, default):
         return default
 
 
+def env_bool(name, default=False):
+    return os.getenv(name, "True" if default else "False").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name, default):
+    """Comma-separated env override with a code default (same pattern as ALLOWED_HOSTS)."""
+    raw = os.getenv(name)
+    values = default if raw is None else raw.split(",")
+    return [item.strip() for item in values if item and item.strip()]
+
+
 # Senior Optimization: Lower CONN_MAX_AGE for small RAM servers
 # 20-30 seconds is better than 60 if RAM is tight.
 DB_CONN_MAX_AGE = env_int("DB_CONN_MAX_AGE", 20 if IS_PRODUCTION else 0)
@@ -56,6 +70,7 @@ DB_CONNECT_TIMEOUT = env_int("DB_CONNECT_TIMEOUT", 10)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-+#ds1yk1fdrx$=3&yf+!q$r9sy!l$vjl8ea@_fhya_t3(okl!p')
+API_KEY_PEPPER = os.getenv("API_KEY_PEPPER", "" if IS_PRODUCTION else SECRET_KEY)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "False") == "True" if IS_PRODUCTION else True
@@ -78,6 +93,7 @@ INSTALLED_APPS = [
     
     # Third-party apps
     "rest_framework",
+    "drf_spectacular",
     'rest_framework.authtoken',
     'dj_rest_auth',
     'corsheaders',
@@ -99,6 +115,7 @@ MIDDLEWARE = [
     'serverConfig.middleware.TrustedProxyMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'serverConfig.middleware.ApiRequestSizeMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.gzip.GZipMiddleware',  # GZip must be high in the stack for API responses
     'django.middleware.http.ConditionalGetMiddleware',  # Adds ETag support
@@ -140,6 +157,8 @@ ROOT_URLCONF = 'serverConfig.urls'
 
 
 ASGI_APPLICATION = 'serverConfig.asgi.application'
+
+API_RENDER_WATCH_TTL_SECONDS = env_int("API_RENDER_WATCH_TTL_SECONDS", 60)
 
 
 if ENV == "production":
@@ -250,11 +269,10 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 SECURE_CROSS_ORIGIN_OPENER_POLICY = None
 SECURE_REFERRER_POLICY = 'same-origin' if IS_PRODUCTION else 'no-referrer-when-downgrade'
 
-# Production-only hardening.
-# Note: SECURE_SSL_REDIRECT is intentionally NOT set — Cloudflare already
-# upgrades HTTP→HTTPS at the edge, so origin-side redirect is redundant and
-# breaks under CF "Flexible" SSL mode (redirect loop → 502).
+# Production-only hardening. The edge proxy must use Full (strict) TLS to the
+# origin; Flexible TLS is not acceptable for authenticated or paid API traffic.
 if IS_PRODUCTION:
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", True)
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
@@ -271,6 +289,22 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+
+# Optional shared private object storage. The web and Celery worker must see the
+# same media backend for render outputs; without these variables, deployments
+# must mount one shared /app/media volume into both services.
+AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
+if AWS_STORAGE_BUCKET_NAME:
+    AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
+    AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+    AWS_S3_ENDPOINT_URL = os.getenv("AWS_S3_ENDPOINT_URL")
+    AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME")
+    AWS_S3_CUSTOM_DOMAIN = os.getenv("AWS_S3_CUSTOM_DOMAIN") or None
+    AWS_QUERYSTRING_AUTH = True
+    AWS_QUERYSTRING_EXPIRE = env_int("AWS_QUERYSTRING_EXPIRE", 300)
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    STORAGES["default"] = {"BACKEND": "api.storage_backends.MediaStorage"}
 
 # File Upload Settings
 DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB
@@ -300,6 +334,17 @@ FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
 
 # Increase request body size limit for large SVG files
 REQUEST_BODY_SIZE_LIMIT = 100 * 1024 * 1024  # 100MB
+API_V1_MAX_REQUEST_BYTES = env_int("API_V1_MAX_REQUEST_BYTES", 25 * 1024 * 1024)
+API_DASHBOARD_MAX_REQUEST_BYTES = env_int("API_DASHBOARD_MAX_REQUEST_BYTES", 256 * 1024)
+API_RENDER_MAX_SVG_BYTES = env_int("API_RENDER_MAX_SVG_BYTES", 50 * 1024 * 1024)
+API_RENDER_MAX_PIXELS = env_int("API_RENDER_MAX_PIXELS", 25_000_000)
+API_RENDER_MAX_DIMENSION = env_int("API_RENDER_MAX_DIMENSION", 8_192)
+API_RENDER_MAX_OUTPUT_BYTES = env_int("API_RENDER_MAX_OUTPUT_BYTES", 50 * 1024 * 1024)
+API_RENDER_RETENTION_HOURS = env_int("API_RENDER_RETENTION_HOURS", 24)
+API_RENDER_MAX_ACTIVE_PER_KEY = env_int("API_RENDER_MAX_ACTIVE_PER_KEY", 10)
+API_RENDER_MAX_ACTIVE_PER_USER = env_int("API_RENDER_MAX_ACTIVE_PER_USER", 20)
+API_RENDER_STORAGE_BYTES_PER_USER = env_int("API_RENDER_STORAGE_BYTES_PER_USER", 1024 ** 3)
+API_EMBED_MAX_PENDING_PER_KEY = env_int("API_EMBED_MAX_PENDING_PER_KEY", 500)
 
 # Cache Configuration for better performance
 # Use Redis for caching in production, fallback to local memory cache in development
@@ -362,6 +407,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'accounts.authentication.JWTAuthenticationFromCookies',
     ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_THROTTLE_CLASSES': (
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
@@ -379,6 +425,18 @@ REST_FRAMEWORK = {
         'analytics_ingest': os.getenv('THROTTLE_ANALYTICS_INGEST', '120/min' if IS_PRODUCTION else '1000/min'),
         'admin_read':    os.getenv('THROTTLE_ADMIN_READ',    '600/min' if IS_PRODUCTION else '2000/min'),
     },
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'SharpToolz API',
+    'DESCRIPTION': 'Multi-tenant document API and hosted-form sessions.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SCHEMA_PATH_PREFIX': r'/api/v1',
+    'SCHEMA_PATH_PREFIX_TRIM': True,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'PREPROCESSING_HOOKS': ['api.schema.filter_public_v1_endpoints'],
+    'SERVERS': [{'url': '/api/v1', 'description': 'SharpToolz API v1'}],
 }
 
 # -----------------------------------------------------------------------------
@@ -428,71 +486,101 @@ AXES_DISABLE_ACCESS_LOG = False
 AXES_VERBOSE = not IS_PRODUCTION
 AXES_CACHE = 'default'
 
+# ---------------------------------------------------------------------------
+# CORS / CSRF
+#
+# The dashboard is a separate origin from the API, and the browser sends the
+# JWT as a cookie, so EVERY browser origin needs two grants:
+#   1. CORS_ALLOWED_ORIGINS   -> the browser is allowed to read the response
+#   2. CSRF_TRUSTED_ORIGINS   -> Django accepts its POST/PUT/PATCH/DELETE
+# Granting only the first produces a 403 "Origin checking failed" on write,
+# which reads like a CORS bug but is not one. Keep the two lists in step.
+#
+# Customer embeds do NOT belong here: the hosted form runs in an iframe served
+# from FRONTEND_URL, so its requests carry the sharptoolz.com origin and the
+# customer's own domain arrives in the X-Embed-Origin header instead.
+#
+# Both lists are env-driven so a new domain ships without a code deploy.
+# ---------------------------------------------------------------------------
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = [
+
+# Local dev servers. Non-production only — never grant these in production, or
+# any page on a developer's machine can drive the live API with real cookies.
+LOCAL_ORIGINS = [
     "http://localhost:5173",
-    "http://localhost:5174",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:5174",
-    "https://docs-maker-demo.vercel.app",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://order-tracker-demo.vercel.app",
+]
+
+# Browser origins that call the API.
+DEFAULT_CORS_ORIGINS = [
     "https://sharptoolz.com",
-    "https://parcelfinda.com",
-    "http://38.242.198.49",
-    "https://myflightlookup.com",
     "https://api.sharptoolz.com",
     "https://cdn.sharptoolz.com",
     "https://dev.sharptoolz.com",
     "https://devapi.sharptoolz.com",
-]
-
-CORS_ORIGIN_WHITELIST = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    "https://docs-maker-demo.vercel.app",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://order-tracker-demo.vercel.app",
-    "https://sharptoolz.com",
-    "http://38.242.198.49",
     "https://parcelfinda.com",
     "https://myflightlookup.com",
-    "https://api.sharptoolz.com",
+    "https://docs-maker-demo.vercel.app",
+    "https://order-tracker-demo.vercel.app",
+    "http://38.242.198.49",
 ]
 
-# Allow all origins ONLY in development. Production must use the explicit list.
-CORS_ALLOW_ALL_ORIGINS = not IS_PRODUCTION
+# Origins trusted to send unsafe methods. Narrower than the CORS list: the
+# demo deployments may read, but they may not write with a user's cookies.
+DEFAULT_CSRF_ORIGINS = [
+    "https://sharptoolz.com",
+    "https://api.sharptoolz.com",
+    "https://cdn.sharptoolz.com",
+    "https://dev.sharptoolz.com",
+    "https://devapi.sharptoolz.com",
+    "https://parcelfinda.com",
+    "https://myflightlookup.com",
+]
+
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    DEFAULT_CORS_ORIGINS if IS_PRODUCTION else DEFAULT_CORS_ORIGINS + LOCAL_ORIGINS,
+)
+
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    DEFAULT_CSRF_ORIGINS if IS_PRODUCTION else DEFAULT_CSRF_ORIGINS + LOCAL_ORIGINS,
+)
+
+# Echoing back any origin while allowing credentials means any website can read
+# authenticated responses, so it is limited to local development. Staging and
+# every other deployed env authenticate real users and must use the list above.
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", ENV == "development")
+
 CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+CORS_ALLOW_HEADERS = (*default_headers, 'x-embed-origin', 'idempotency-key')
 
-# CSRF Trusted Origins - Required for CSRF validation
-CSRF_TRUSTED_ORIGINS = [
-    "https://api.sharptoolz.com",  # Add your API domain
-    "https://cdn.sharptoolz.com",
-    "https://myflightlookup.com",
-    "https://sharptoolz.com",
-    "https://parcelfinda.com",
-    "https://dev.sharptoolz.com",
-    "https://devapi.sharptoolz.com",
-]
+# Dashboard and API subdomains are same-site, so cross-site cookies are not
+# required. Hosted customer embeds authenticate with a scoped bearer session.
+COOKIE_SAMESITE = os.getenv('COOKIE_SAMESITE', 'Lax')
 
-# Security / Cookie settings (Restored to working cross-site defaults)
-JWT_COOKIE_SAMESITE = 'None'
-JWT_COOKIE_SECURE = True
+# Secure cookies are mandatory in production. Local dev runs on plain http, and
+# Safari drops Secure cookies there even on localhost, so default it off when
+# not in production rather than relying on a browser special case.
+COOKIE_SECURE = env_bool("COOKIE_SECURE", IS_PRODUCTION)
+
+JWT_COOKIE_SAMESITE = COOKIE_SAMESITE
+JWT_COOKIE_SECURE = COOKIE_SECURE
 JWT_COOKIE_HTTPONLY = True
 JWT_COOKIE_PATH = '/'
 
-CSRF_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_SAMESITE = COOKIE_SAMESITE
+CSRF_COOKIE_SECURE = COOKIE_SECURE
 CSRF_COOKIE_HTTPONLY = False
-CSRF_COOKIE_PATH = '/' 
+CSRF_COOKIE_PATH = '/'
 
-SESSION_COOKIE_SAMESITE = 'None'
-SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_SAMESITE = COOKIE_SAMESITE
+SESSION_COOKIE_SECURE = COOKIE_SECURE
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_PATH = '/'
 
@@ -504,8 +592,21 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'SIGNING_KEY': os.getenv('JWT_SIGNING_KEY', SECRET_KEY),
 }
-if IS_PRODUCTION and (SIMPLE_JWT['SIGNING_KEY'] in (None, '', 'your-secret-key-here') or SECRET_KEY.startswith('django-insecure-')):
-    raise RuntimeError("JWT_SIGNING_KEY (or SECRET_KEY) must be set to a strong secret in production")
+if IS_PRODUCTION:
+    signing_key = SIMPLE_JWT["SIGNING_KEY"] or ""
+    weak_secret = (
+        len(SECRET_KEY) < 50
+        or len(set(SECRET_KEY)) < 8
+        or SECRET_KEY.startswith("django-insecure-")
+    )
+    weak_signing_key = (
+        len(signing_key) < 50
+        or len(set(signing_key)) < 8
+        or signing_key == "your-secret-key-here"
+    )
+    weak_api_pepper = len(API_KEY_PEPPER) < 50 or len(set(API_KEY_PEPPER)) < 8
+    if weak_secret or weak_signing_key or weak_api_pepper:
+        raise RuntimeError("SECRET_KEY, JWT_SIGNING_KEY, and API_KEY_PEPPER must be strong production secrets")
 
 SITE_ID = 1
 

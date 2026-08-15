@@ -38,6 +38,11 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Python package build artifacts
+build/
+dist/
+*.egg-info/
+
 cloudflare-b2-worker/
 
 cloudflare-b2-worker/

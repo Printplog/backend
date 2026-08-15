@@ -9,7 +9,15 @@ from .views import (
     AiChatView, AiChatSessionViewSet, ContactView,
 )
 from django.urls import path
+from django.urls import include
 from django.http import HttpResponse
+from .views.api_platform import (
+    ApiAccessStatusView,
+    ApiActivateView,
+    ApiCustomerConfigurationView,
+    ApiKeyListCreateView,
+    ApiKeyRevokeView,
+)
 
 def health_check(request):
     return HttpResponse("OK")
@@ -27,6 +35,12 @@ router.register(r'ai-chat/sessions', AiChatSessionViewSet, basename='ai-chat-ses
 router.register(r'referrals', ReferralViewSet, basename='referral')
 
 urlpatterns = [
+    path("v1/", include("api.v1_urls")),
+    path("api-access/", ApiAccessStatusView.as_view(), name="api-access-status"),
+    path("api-access/activate/", ApiActivateView.as_view(), name="api-access-activate"),
+    path("api-access/configuration/", ApiCustomerConfigurationView.as_view(), name="api-access-configuration"),
+    path("api-access/keys/", ApiKeyListCreateView.as_view(), name="api-key-list-create"),
+    path("api-access/keys/<uuid:key_id>/", ApiKeyRevokeView.as_view(), name="api-key-revoke"),
     path("track/<str:tracking_id>/", PublicTemplateTrackingView.as_view(), name="track-template"),
     path("download-doc/", DownloadDoc.as_view(), name="download-doc"),
     path("increment-downloads/", IncrementDownloads.as_view(), name="increment-downloads"),

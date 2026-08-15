@@ -220,11 +220,25 @@ class PurchasedTemplate(models.Model):
     svg_file = models.FileField(upload_to='purchased_templates/svgs/', blank=True, null=True)
     form_fields = models.JSONField(default=list, blank=True)
     test = models.BooleanField(default=True)
+    external_user_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Opaque end-user identifier supplied by the owning API customer",
+    )
     tracking_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     keywords = models.JSONField(default=list, blank=True)
     fonts = models.ManyToManyField('Font', blank=True, related_name='purchased_templates')
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["buyer", "external_user_id", "-created_at"],
+                name="api_doc_tenant_ext_created_idx",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         # 1. Handle initial SVG ingestion for purchases (bespoke uploads)
@@ -258,6 +272,229 @@ class PurchasedTemplate(models.Model):
 
     def __str__(self):
         return f"{self.buyer.username} - {self.name}"
+
+
+class ApiEntitlement(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        SUSPENDED = "suspended", "Suspended"
+        REVOKED = "revoked", "Revoked"
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="api_entitlement",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    payment_transaction = models.ForeignKey(
+        "wallet.Transaction",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="api_entitlements",
+    )
+    activated_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username} API ({self.status})"
+
+
+class ApiCustomerSettings(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="api_customer_settings",
+    )
+    allowed_origins = models.JSONField(default=list, blank=True)
+    theme = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username} API settings"
+
+
+class ApiKey(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys")
+    name = models.CharField(max_length=100)
+    prefix = models.CharField(max_length=24, unique=True)
+    secret_hash = models.CharField(max_length=64, unique=True)
+    scopes = models.JSONField(default=list, blank=True)
+    allowed_origins = models.JSONField(default=list, blank=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "revoked_at"], name="api_key_user_active_idx"),
+        ]
+
+    @property
+    def is_active(self):
+        from django.utils import timezone
+
+        return self.revoked_at is None and (
+            self.expires_at is None or self.expires_at > timezone.now()
+        )
+
+    def __str__(self):
+        return f"{self.user.username} - {self.name} ({self.prefix})"
+
+
+class EmbedSession(models.Model):
+    class Operation(models.TextChoices):
+        CREATE = "create", "Create"
+        EDIT = "edit", "Edit"
+
+    class Mode(models.TextChoices):
+        TEST = "test", "Test"
+        PAID = "paid", "Paid"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        COMPLETED = "completed", "Completed"
+        REVOKED = "revoked", "Revoked"
+        EXPIRED = "expired", "Expired"
+
+    class PreviewMode(models.TextChoices):
+        STANDARD = "standard", "Standard"
+        PROTECTED = "protected", "Protected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="embed_sessions")
+    api_key = models.ForeignKey(
+        ApiKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="embed_sessions",
+    )
+    template = models.ForeignKey(Template, on_delete=models.CASCADE, related_name="embed_sessions")
+    document = models.ForeignKey(
+        PurchasedTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="embed_sessions",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    external_user_id = models.CharField(max_length=255)
+    allowed_origin = models.URLField(max_length=500)
+    operation = models.CharField(
+        max_length=8,
+        choices=Operation.choices,
+        default=Operation.CREATE,
+    )
+    mode = models.CharField(max_length=8, choices=Mode.choices, default=Mode.TEST)
+    preview_mode = models.CharField(
+        max_length=16,
+        choices=PreviewMode.choices,
+        default=PreviewMode.STANDARD,
+    )
+    prefill = models.JSONField(default=dict, blank=True)
+    theme = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    expires_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "status", "-created_at"], name="embed_user_status_created_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.template.name} ({self.status})"
+
+
+class DocumentRenderJob(models.Model):
+    class Format(models.TextChoices):
+        PNG = "png", "PNG"
+        PDF = "pdf", "PDF"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="document_render_jobs")
+    document = models.ForeignKey(
+        PurchasedTemplate,
+        on_delete=models.CASCADE,
+        related_name="render_jobs",
+    )
+    requested_by_key = models.ForeignKey(
+        ApiKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="render_jobs",
+    )
+    format = models.CharField(max_length=4, choices=Format.choices)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    output_file = models.FileField(upload_to="api/renders/%Y/%m/%d/", null=True, blank=True)
+    output_size = models.PositiveBigIntegerField(default=0)
+    error_code = models.CharField(max_length=64, blank=True)
+    expires_at = models.DateTimeField()
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "status", "-created_at"], name="render_user_status_created_idx"),
+            models.Index(fields=["expires_at"], name="render_expiry_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.document_id} {self.format} ({self.status})"
+
+
+class ApiIdempotencyRecord(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    api_key = models.ForeignKey(ApiKey, on_delete=models.CASCADE, related_name="idempotency_records")
+    operation = models.CharField(max_length=64)
+    key = models.CharField(max_length=128)
+    request_hash = models.CharField(max_length=64)
+    document = models.ForeignKey(
+        PurchasedTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="idempotency_records",
+    )
+    render_job = models.ForeignKey(
+        DocumentRenderJob,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="idempotency_records",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["api_key", "operation", "key"],
+                name="unique_api_idempotency_key",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["created_at"], name="api_idempotency_created_idx"),
+        ]
 
 class Tutorial(models.Model):
     # A tutorial is scoped to exactly one of: a template, a tool, or neither (general).
@@ -336,6 +573,20 @@ class SiteSettings(models.Model):
     disable_deposits = models.BooleanField(default=False, help_text="Lock the wallet top-up functionality temporarily")
     enable_ai_features = models.BooleanField(default=True, help_text="Global kill-switch for AI Chat and assistant features")
 
+    # API platform access. When upgrade is not required, customers still
+    # activate a free entitlement so access can be suspended or revoked.
+    enable_api_access = models.BooleanField(default=False, help_text="Global API and embed kill-switch")
+    require_api_upgrade = models.BooleanField(default=True, help_text="Charge the configured wallet amount before API activation")
+    api_upgrade_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    api_tool_discount_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text="Global percentage discount applied to paid API documents",
+    )
+    api_default_rate_limit = models.PositiveIntegerField(default=120, help_text="Requests per API key per minute")
+    api_session_ttl_minutes = models.PositiveIntegerField(default=30, help_text="Maximum lifetime of a hosted embed session")
+
     # 4. Branding Defaults
     global_announcement_text = models.TextField(blank=True, help_text="Text for global dashboard banner")
     global_announcement_link = models.URLField(blank=True, help_text="Optional link for global banner")
@@ -363,6 +614,16 @@ class SiteSettings(models.Model):
 
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(api_tool_discount_percentage__gte=0)
+                    & models.Q(api_tool_discount_percentage__lte=100)
+                ),
+                name="api_tool_discount_between_0_and_100",
+            ),
+        ]
 
     @classmethod
     def get_settings(cls):
@@ -453,3 +714,13 @@ def auto_delete_file_on_delete_purchase(sender, instance, **kwargs):
                 logger.info("[Signal] Deleted baked SVG for Purchase %s", instance.id)
         except Exception as e:
             logger.error(f"Failed to delete SVG file for purchase {instance.id}: {e}")
+
+
+@receiver(post_delete, sender=DocumentRenderJob)
+def auto_delete_render_file(sender, instance, **kwargs):
+    """Delete expired/revoked render artifacts from the configured storage."""
+    if instance.output_file:
+        try:
+            instance.output_file.delete(save=False)
+        except Exception as exc:
+            logger.error("Failed to delete render output %s: %s", instance.id, exc)

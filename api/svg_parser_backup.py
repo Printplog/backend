@@ -1,4 +1,4 @@
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 
 
 def parse_svg_to_form_fields(svg_text: str) -> list[dict]:

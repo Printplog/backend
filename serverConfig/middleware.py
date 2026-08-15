@@ -8,6 +8,36 @@ Server-level middleware.
   rate limits / lockouts target the wrong IP.
 """
 from django.conf import settings
+from django.http import JsonResponse
+
+
+class ApiRequestSizeMiddleware:
+    """Reject oversized API bodies before DRF parses attacker-controlled JSON."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self.max_v1_bytes = int(getattr(settings, "API_V1_MAX_REQUEST_BYTES", 25 * 1024 * 1024))
+        self.max_dashboard_bytes = int(getattr(settings, "API_DASHBOARD_MAX_REQUEST_BYTES", 256 * 1024))
+
+    def __call__(self, request):
+        limit = None
+        if request.path.startswith("/api/v1/"):
+            limit = self.max_v1_bytes
+        elif request.path.startswith("/api/api-access/"):
+            limit = self.max_dashboard_bytes
+
+        raw_length = request.META.get("CONTENT_LENGTH")
+        if limit is not None and raw_length:
+            try:
+                content_length = int(raw_length)
+            except (TypeError, ValueError):
+                return JsonResponse({"detail": "Invalid Content-Length header."}, status=400)
+            if content_length < 0:
+                return JsonResponse({"detail": "Invalid Content-Length header."}, status=400)
+            if content_length > limit:
+                return JsonResponse({"detail": "Request body is too large."}, status=413)
+
+        return self.get_response(request)
 
 
 class MediaCorsMiddleware:

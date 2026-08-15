@@ -1,4 +1,6 @@
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as SafeET
+from xml.etree import ElementTree as ET
+from xml.etree.ElementTree import Element
 import logging
 import re
 from typing import Optional, Dict, List, Any, Tuple
@@ -115,7 +117,7 @@ def fix_svg_element_ids(svg_content: str) -> Tuple[str, int]:
         # Parse SVG — register all namespaces from the document first so they
         # are not rewritten (e.g. xlink, svg, etc.)
         namespaces: dict[str, str] = {}
-        for event, elem in ET.iterparse(
+        for event, elem in SafeET.iterparse(
             __import__('io').StringIO(svg_content), events=['start-ns']
         ):
             prefix, uri = elem
@@ -127,7 +129,7 @@ def fix_svg_element_ids(svg_content: str) -> Tuple[str, int]:
         ET.register_namespace('', 'http://www.w3.org/2000/svg')
         ET.register_namespace('xlink', 'http://www.w3.org/1999/xlink')
 
-        root = ET.fromstring(svg_content)
+        root = SafeET.fromstring(svg_content)
 
         for elem in root.iter():
             elem_id = elem.get('id')
@@ -180,7 +182,7 @@ def extract_link_url(element_id: str) -> tuple[str, Optional[str]]:
     return str(element_id), None
 
 
-def is_element_visible(element: ET.Element) -> bool:
+def is_element_visible(element: Element) -> bool:
     """
     Check if an SVG element is visible based on its attributes.
     """
@@ -250,7 +252,7 @@ def get_field_name(base_id: str) -> str:
 # SELECT FIELD HANDLING
 # ============================================================================
 
-def create_select_option(element_id: str, element: ET.Element, parts: List[str], option_text: str = "") -> Dict[str, Any]:
+def create_select_option(element_id: str, element: Element, parts: List[str], option_text: str = "") -> Dict[str, Any]:
     """
     Create a select option dictionary from element data.
 
@@ -613,7 +615,7 @@ def parse_field_from_id(element_id: str, text_content: str = "") -> Optional[Dic
 # ============================================================================
 
     
-def process_element_to_field(element: ET.Element, fields_list: List[Dict[str, Any]], select_options_map: Dict[str, List[Dict[str, Any]]]):
+def process_element_to_field(element: Element, fields_list: List[Dict[str, Any]], select_options_map: Dict[str, List[Dict[str, Any]]]):
     """
     Process a single SVG element and either update existing fields or add new ones.
     """
@@ -722,7 +724,7 @@ def parse_svg_to_form_fields(svg_text: str) -> List[Dict[str, Any]]:
     Elements with the same base_id are merged into a single field.
     """
     try:
-        root = ET.fromstring(svg_text)
+        root = SafeET.fromstring(svg_text)
     except ET.ParseError as e:
         logger.error(f"Failed to parse SVG: {e}")
         return []
@@ -800,4 +802,3 @@ def parse_svg_to_form_fields(svg_text: str) -> List[Dict[str, Any]]:
                     field['trackingRole'] = track_part[6:]  # strip 'track_'
 
     return list(fields_map.values())
-

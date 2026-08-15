@@ -7,6 +7,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.conf import settings
+from .authentication import enforce_csrf_for_request
+from django.middleware.csrf import get_token
 from .serializers import *
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
@@ -26,6 +28,7 @@ class RegisterView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'auth_register'
     def post(self, request):
+        enforce_csrf_for_request(request)
         serializer = RegisterSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             user = serializer.save()
@@ -40,12 +43,25 @@ class RegisterView(APIView):
             }, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CsrfTokenView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        return Response({"csrfToken": get_token(request)})
     
 class LoginView(BaseLoginView):
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'auth_login'
+
+    def post(self, request, *args, **kwargs):
+        enforce_csrf_for_request(request)
+        return super().post(request, *args, **kwargs)
+
     def get_response(self): # type: ignore
         super().get_response()  # This sets the cookies or does other side-effects if needed
 
@@ -108,6 +124,7 @@ class ForgotPasswordView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'auth_password'
     def post(self, request):
+        enforce_csrf_for_request(request)
         serializer = ForgotPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -131,6 +148,7 @@ class ResetPasswordConfirmView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'auth_password'
     def post(self, request):
+        enforce_csrf_for_request(request)
         serializer = ResetPasswordConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -183,6 +201,7 @@ class GoogleAuthView(APIView):
     throttle_scope = 'auth_login'
 
     def post(self, request):
+        enforce_csrf_for_request(request)
         access_token = request.data.get('access_token')
         if not access_token:
             return Response({'error': 'Google access_token is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -271,6 +290,7 @@ class RefreshTokenView(APIView):
     throttle_scope = 'auth_login'
 
     def post(self, request):
+        enforce_csrf_for_request(request)
         refresh_token = request.COOKIES.get('refresh_token')
 
         if not refresh_token:

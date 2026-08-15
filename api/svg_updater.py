@@ -199,9 +199,10 @@ def update_svg_from_field_updates(
 
     # Create cache key from SVG hash and field updates
     # This allows us to cache processed results for identical inputs
-    svg_hash = hashlib.md5(svg_content.encode('utf-8')).hexdigest()
+    svg_hash = hashlib.sha256(svg_content.encode('utf-8')).hexdigest()
     field_updates_str = json.dumps(field_updates or [], sort_keys=True)
-    cache_key = f"svg_update_{svg_hash}_{hashlib.md5(field_updates_str.encode('utf-8')).hexdigest()}"
+    updates_hash = hashlib.sha256(field_updates_str.encode('utf-8')).hexdigest()
+    cache_key = f"svg_update_{svg_hash}_{updates_hash}"
     
     # Try to get from cache (cache for 1 hour)
     cached_result = cache.get(cache_key)
@@ -211,7 +212,12 @@ def update_svg_from_field_updates(
     # Use lxml for much faster parsing of large SVGs (10-100x faster than BeautifulSoup)
     try:
         # Parse SVG with lxml (much faster for large files)
-        parser = etree.XMLParser(recover=True, huge_tree=True)
+        parser = etree.XMLParser(
+            resolve_entities=False,
+            no_network=True,
+            recover=False,
+            huge_tree=False,
+        )
         root = etree.fromstring(svg_content.encode('utf-8'), parser=parser)
     except Exception:
         # Fallback to original content if parsing fails

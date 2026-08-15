@@ -11,6 +11,7 @@ django.setup()
 # IMPORT AFTER DJANGO.SETUP() to avoid ImproperlyConfigured errors
 from wallet.routing import websocket_urlpatterns as wallet_ws
 from analytics.routing import websocket_urlpatterns as analytics_ws
+from api.routing import websocket_urlpatterns as api_ws
 from accounts.authentication import JWTAuthMiddlewareStack
 
 # Create HTTP application with static files for dev
@@ -21,6 +22,6 @@ if settings.DEBUG:
 application = ProtocolTypeRouter({
     "http": http_app,
     "websocket": JWTAuthMiddlewareStack(
-        URLRouter(wallet_ws + analytics_ws)
+        URLRouter(wallet_ws + analytics_ws + api_ws)
     ),
 })

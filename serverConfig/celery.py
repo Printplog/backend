@@ -23,6 +23,10 @@ app.conf.beat_schedule = {
         "task": "wallet.tasks.expire_deposit_bonuses",
         "schedule": crontab(minute=0),  # hourly
     },
+    "api-cleanup-expired-renders": {
+        "task": "api.tasks.cleanup_expired_document_renders",
+        "schedule": crontab(minute=20),
+    },
 }
 
 

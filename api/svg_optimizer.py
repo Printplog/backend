@@ -2,7 +2,8 @@
 SVG optimization utilities to reduce storage size and improve loading performance.
 """
 import re
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as SafeET
+from xml.etree import ElementTree as ET
 from typing import Optional
 
 
@@ -32,7 +33,7 @@ def minify_svg(svg_text: str) -> str:
     
     try:
         # Parse SVG to validate structure
-        root = ET.fromstring(svg_text)
+        root = SafeET.fromstring(svg_text)
         
         # Serialize back - ET.tostring preserves all attributes and content
         # We're NOT modifying the tree, just re-serializing it
@@ -74,4 +75,3 @@ def get_svg_size_kb(svg_text: str) -> float:
     if not svg_text:
         return 0.0
     return len(svg_text.encode('utf-8')) / 1024.0
-

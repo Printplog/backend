@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A fictional customer website demonstrating the SharpToolz hosted form integration." />
+    <title>PaperPilot — Document Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="PaperPilot home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M6 7.8 27 4l-5.4 23-6.2-8.2-7.2 5.4 2.5-9.1L6 7.8Zm5.9 6.9 4.5 1.9 3.6 4.8 3.1-13.2-11.2 6.5Z"/></svg>
+        </span>
+        <span>PaperPilot</span>
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#templates">Template</a>
+        <a href="#how-it-works">How it works</a>
+      </nav>
+      <span class="demo-chip"><i></i> Demo workspace</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <span class="eyebrow">Customer document portal</span>
+          <h1>Choose a document.<br /><em>Make it yours.</em></h1>
+          <p>
+            This is a fictional customer website. Its interface is completely custom,
+            while the secure form is loaded live from SharpToolz.
+          </p>
+          <a class="hero-action" href="#templates">Open real template <span>↘</span></a>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="orbit orbit-one"></div>
+          <div class="orbit orbit-two"></div>
+          <div class="paper paper-back"><span>JFK → IST</span><b>Confirmed</b></div>
+          <div class="paper paper-front"><small>SHARPTOOLZ TRAVEL</small><strong>Boarding<br />Pass</strong><i>Real template</i></div>
+          <span class="spark spark-one">✦</span>
+          <span class="spark spark-two">✦</span>
+        </div>
+      </section>
+
+      <section class="library" id="templates">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Template library</span>
+            <h2>Try a real SharpToolz template</h2>
+          </div>
+          <label class="user-field">
+            <span>Your user reference</span>
+            <input id="external-user-id" value="customer-0042" maxlength="255" autocomplete="off" />
+          </label>
+        </div>
+
+        <div id="template-status" class="loading-state" role="status">
+          <span class="loader"></span> Loading the real template…
+        </div>
+        <div id="template-grid" class="template-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="how" id="how-it-works">
+        <span class="eyebrow">Under the hood</span>
+        <h2>Our design. SharpToolz infrastructure.</h2>
+        <div class="how-grid">
+          <article>
+            <span class="how-icon">⌁</span>
+            <h3>The template arrives by API</h3>
+            <p>PaperPilot lists several real travel templates from its own backend without exposing its secret key.</p>
+          </article>
+          <article>
+            <span class="how-icon">◫</span>
+            <h3>The form stays current</h3>
+            <p>A short-lived session loads the newest SharpToolz form inside this customer experience.</p>
+          </article>
+          <article>
+            <span class="how-icon">✓</span>
+            <h3>The document comes back</h3>
+            <p>When the user finishes, PaperPilot receives the document ID and displays the finished PNG render.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="brand footer-brand"><span class="brand-mark" aria-hidden="true">P</span><span>PaperPilot</span></div>
+      <p>A separate fictional site powered by the SharpToolz API.</p>
+      <span>Integration demo</span>
+    </footer>
+
+    <dialog id="form-dialog" aria-labelledby="dialog-title">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <span class="eyebrow">Secure hosted form</span>
+            <h2 id="dialog-title">Create document</h2>
+          </div>
+          <button id="close-dialog" class="close-button" type="button" aria-label="Close form">×</button>
+        </header>
+        <div id="session-status" class="session-status"><span class="loader"></span> Preparing secure session…</div>
+        <div id="document-form"></div>
+        <div id="completion-message" class="completion-message" hidden>
+          <div class="result-heading">
+            <span>✓</span>
+            <div><strong>Document returned to PaperPilot</strong><p id="completion-id"></p></div>
+          </div>
+          <p id="result-status" class="result-status"><span class="loader"></span> Rendering the finished PNG…</p>
+          <div id="result-frame" class="result-frame" hidden>
+            <img id="result-image" alt="Your finished SharpToolz document" />
+          </div>
+          <div class="result-actions">
+            <a id="result-download" href="#" target="_blank" rel="noopener" hidden>Open full PNG</a>
+            <button id="create-another" type="button">Create another</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <script src="/demo-config.js"></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

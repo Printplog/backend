@@ -30,7 +30,7 @@ def add_cache_headers(response, max_age=300, public=True):
     
     # Add ETag for conditional requests if content is available
     if hasattr(http_response, 'content') and http_response.content:
-        etag = hashlib.md5(http_response.content).hexdigest()
+        etag = hashlib.sha256(http_response.content).hexdigest()
         http_response['ETag'] = f'"{etag}"'
     
     return response
@@ -59,4 +59,3 @@ def add_list_response_headers(response, request, max_age=60):
         patch_vary_headers(response, ['Accept', 'Accept-Encoding'])
     
     return response
-

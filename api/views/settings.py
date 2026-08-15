@@ -5,7 +5,8 @@ from rest_framework.decorators import action
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.conf import settings
-import random
+import secrets
+from django.contrib.auth.hashers import check_password, make_password
 
 from ..models import SiteSettings
 from ..serializers import SiteSettingsSerializer, PublicSiteSettingsSerializer
@@ -14,6 +15,9 @@ class SiteSettingsViewSet(viewsets.ViewSet):
     """
     ViewSet for site configuration protected by email OTP (5-minute expiry).
     """
+    def get_throttles(self):
+        self.throttle_scope = 'auth_password' if self.action in {'request_code', 'partial_update'} else None
+        return super().get_throttles()
     def get_permissions(self):
         if self.action == 'list':
             return [AllowAny()]
@@ -39,11 +43,11 @@ class SiteSettingsViewSet(viewsets.ViewSet):
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
         
         # Generate 6-digit code
-        code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+        code = f"{secrets.randbelow(1_000_000):06d}"
         
         # Store in cache for 5 minutes (300 seconds)
         cache_key = f"admin_settings_otp_{request.user.id}"
-        cache.set(cache_key, code, 300)
+        cache.set(cache_key, make_password(code), 300)
         
         # DEV MODE CONVENIENCE: Print to console
         if settings.DEBUG:
@@ -73,7 +77,7 @@ class SiteSettingsViewSet(viewsets.ViewSet):
             import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to send verification email: {str(e)}")
-            return Response({"error": f"Failed to send email: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": "Failed to send verification email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def partial_update(self, request, pk=None):
         if not request.user.is_superuser:
@@ -86,12 +90,12 @@ class SiteSettingsViewSet(viewsets.ViewSet):
 
         # OTP Verification from cache
         cache_key = f"admin_settings_otp_{request.user.id}"
-        cached_otp = cache.get(cache_key)
+        cached_otp_hash = cache.get(cache_key)
         
         if not otp:
             return Response({"error": "Verification code is required."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if not cached_otp or otp != cached_otp:
+        if not cached_otp_hash or not check_password(otp, cached_otp_hash):
             return Response({"error": "Invalid or expired verification code."}, status=status.HTTP_403_FORBIDDEN)
 
         # Clear OTP after successful use
@@ -109,7 +113,7 @@ class SiteSettingsViewSet(viewsets.ViewSet):
                 action="UPDATE_SETTINGS",
                 target="Site Settings",
                 ip_address=request.META.get('REMOTE_ADDR'),
-                details=request.data
+                details={key: value for key, value in request.data.items() if key != 'otp'}
             )
             
             return Response(serializer.data)

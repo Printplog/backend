@@ -1,5 +1,4 @@
 import logging
-import traceback
 import io
 import re
 import base64
@@ -182,10 +181,11 @@ class DownloadDoc(APIView):
             return response
 
         except Exception as e:
-            print(f"CRITICAL ERROR in DownloadDoc processing: {str(e)}")
-            error_traceback = traceback.format_exc()
-            print(error_traceback)
-            return Response({"error": str(e), "traceback": error_traceback}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Authenticated document download failed")
+            return Response(
+                {"error": "The document could not be rendered."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
     
     def _handle_split_download(self, output, output_type, user, safe_name="", split_direction="horizontal", side="front"):
         try:
@@ -259,9 +259,12 @@ class DownloadDoc(APIView):
                 response["Content-Disposition"] = f'attachment; filename="{filename}"'
                 return response
                 
-        except Exception as e:
-            error_traceback = traceback.format_exc()
-            return Response({"error": f"Failed to split document: {str(e)}", "traceback": error_traceback}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception:
+            logger.exception("Authenticated split document download failed")
+            return Response(
+                {"error": "The split document could not be rendered."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class IncrementDownloads(APIView):

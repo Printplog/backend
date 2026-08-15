@@ -3,6 +3,8 @@ import hashlib
 import logging
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
+from rest_framework.authentication import CSRFCheck
+from rest_framework.exceptions import PermissionDenied
 from django.utils.translation import gettext_lazy as _
 from django.contrib.auth.middleware import get_user
 from django.contrib.auth import get_user_model
@@ -21,6 +23,16 @@ _WS_AUTH_SENTINEL_ANON = "anon"
 
 logger = logging.getLogger(__name__)
 
+
+def enforce_csrf_for_request(request):
+    """Apply Django's CSRF validation to DRF APIViews, which are csrf_exempt by default."""
+    check = CSRFCheck(lambda django_request: None)
+    django_request = getattr(request, "_request", request)
+    check.process_request(django_request)
+    reason = check.process_view(django_request, None, (), {})
+    if reason:
+        raise PermissionDenied(f"CSRF validation failed: {reason}")
+
 class JWTAuthenticationFromCookies(JWTAuthentication):
     def authenticate(self, request):
         access_token = request.COOKIES.get('access_token')
@@ -33,7 +45,14 @@ class JWTAuthenticationFromCookies(JWTAuthentication):
         if not user or not user.is_active:
             raise AuthenticationFailed(_('User is inactive or deleted.'))
 
+        if request.method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+            enforce_csrf_for_request(request)
+
         return (user, validated_token)
+
+    @staticmethod
+    def enforce_csrf(request):
+        enforce_csrf_for_request(request)
 
 
 def _parse_cookies_from_headers(scope):

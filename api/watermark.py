@@ -21,7 +21,7 @@ class WaterMark():
         
         # Create cache key from SVG content hash
         # This allows us to cache watermarked SVGs to avoid reprocessing
-        svg_hash = hashlib.md5(svg_content.encode('utf-8')).hexdigest()
+        svg_hash = hashlib.sha256(svg_content.encode('utf-8')).hexdigest()
         cache_key = f"svg_watermark_{svg_hash}"
         
         # Try to get from cache (cache for 24 hours since watermarks are deterministic)
@@ -248,4 +248,3 @@ class WaterMark():
             height = float(height_match.group(1))
         
         return width, height
-

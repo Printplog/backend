@@ -86,6 +86,26 @@ class SiteSettingsSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['id', 'updated_at', 'template_cache_version']
 
+    def validate_api_upgrade_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError("API upgrade price cannot be negative.")
+        return value
+
+    def validate_api_tool_discount_percentage(self, value):
+        if not 0 <= value <= 100:
+            raise serializers.ValidationError("API tool discount must be between 0 and 100 percent.")
+        return value
+
+    def validate_api_default_rate_limit(self, value):
+        if not 1 <= value <= 100_000:
+            raise serializers.ValidationError("API rate limit must be between 1 and 100000.")
+        return value
+
+    def validate_api_session_ttl_minutes(self, value):
+        if not 1 <= value <= 1_440:
+            raise serializers.ValidationError("Embed session lifetime must be between 1 and 1440 minutes.")
+        return value
+
 
 class PublicSiteSettingsSerializer(serializers.ModelSerializer):
     """Serializer for guest users only showing non-sensitive configuration."""
@@ -102,6 +122,8 @@ class PublicSiteSettingsSerializer(serializers.ModelSerializer):
             'show_instagram_on_hover', 'show_twitter_on_hover', 'show_tiktok_on_hover',
             'enable_referrals', 'referral_percentage', 'min_referral_deposit', 'min_withdrawal_threshold',
             'enable_deposit_promo', 'deposit_promo_min_amount', 'deposit_promo_percentage',
-            'deposit_promo_max_bonus', 'deposit_promo_expiry_days', 'deposit_promo_message'
+            'deposit_promo_max_bonus', 'deposit_promo_expiry_days', 'deposit_promo_message',
+            'enable_api_access', 'require_api_upgrade', 'api_upgrade_price',
+            'api_tool_discount_percentage'
         ]
         read_only_fields = fields
