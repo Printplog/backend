@@ -69,6 +69,7 @@ class AdminTwoFactorProfile(models.Model):
     recovery_code_hashes = models.JSONField(default=list, blank=True)
     confirmed_at = models.DateTimeField()
     last_used_counter = models.BigIntegerField(default=-1)
+    last_settings_counter = models.BigIntegerField(default=-1)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

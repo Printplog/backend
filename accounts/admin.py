@@ -14,7 +14,7 @@ class AdminTwoFactorProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'confirmed_at', 'created_at', 'updated_at')
     search_fields = ('user__username', 'user__email')
     readonly_fields = ('user', 'confirmed_at', 'created_at', 'updated_at')
-    exclude = ('encrypted_secret', 'recovery_code_hashes', 'last_used_counter')
+    exclude = ('encrypted_secret', 'recovery_code_hashes', 'last_used_counter', 'last_settings_counter')
 
     def has_add_permission(self, request):
         return False

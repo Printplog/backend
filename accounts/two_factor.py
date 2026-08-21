@@ -233,14 +233,19 @@ def enroll_user(user, secret: str, code: str) -> list[str] | None:
     return recovery_codes
 
 
-def _accept_totp_code(profile: AdminTwoFactorProfile, code: str) -> bool:
+def _accept_totp_code(
+    profile: AdminTwoFactorProfile,
+    code: str,
+    *,
+    counter_field: str = "last_used_counter",
+) -> bool:
     secret = decrypt_secret(profile.encrypted_secret)
     counter = _matching_counter(secret, code)
-    if counter is None or counter <= profile.last_used_counter:
+    if counter is None or counter <= getattr(profile, counter_field):
         return False
 
-    profile.last_used_counter = counter
-    profile.save(update_fields=["last_used_counter", "updated_at"])
+    setattr(profile, counter_field, counter)
+    profile.save(update_fields=[counter_field, "updated_at"])
     return True
 
 
@@ -253,6 +258,17 @@ def verify_totp_code(user, code: str) -> bool:
         return False
 
     return _accept_totp_code(profile, code)
+
+
+@transaction.atomic
+def verify_settings_totp_code(user, code: str) -> bool:
+    """Verify a code once for a settings change, independently of login use."""
+    try:
+        profile = AdminTwoFactorProfile.objects.select_for_update().get(user=user)
+    except AdminTwoFactorProfile.DoesNotExist:
+        return False
+
+    return _accept_totp_code(profile, code, counter_field="last_settings_counter")
 
 
 @transaction.atomic

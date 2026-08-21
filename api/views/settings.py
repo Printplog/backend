@@ -3,7 +3,7 @@ from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
-from accounts.two_factor import is_enabled_for_user, verify_totp_code
+from accounts.two_factor import is_enabled_for_user, verify_settings_totp_code
 
 from ..models import SiteSettings
 from ..serializers import SiteSettingsSerializer, PublicSiteSettingsSerializer
@@ -56,7 +56,7 @@ class SiteSettingsViewSet(viewsets.ViewSet):
         settings_data.pop('two_factor_code', None)
         serializer = SiteSettingsSerializer(settings_obj, data=settings_data, partial=True)
         if serializer.is_valid():
-            if not verify_totp_code(request.user, two_factor_code):
+            if not verify_settings_totp_code(request.user, two_factor_code):
                 return Response(
                     {"error": "Invalid or already-used authenticator code."},
                     status=status.HTTP_403_FORBIDDEN,

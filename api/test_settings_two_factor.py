@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import AdminTwoFactorProfile, User
-from accounts.two_factor import encrypt_secret
+from accounts.two_factor import encrypt_secret, verify_user_code
 from api.models import SiteSettings
 
 
@@ -94,6 +94,19 @@ class SiteSettingsTwoFactorTests(TestCase):
 
         self.assertEqual(first.status_code, status.HTTP_200_OK)
         self.assertEqual(second.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(SiteSettings.get_settings().maintenance_mode)
+
+    def test_code_used_for_login_can_still_confirm_one_settings_update(self):
+        code = pyotp.TOTP(self.secret).now()
+        self.assertTrue(verify_user_code(self.admin, code))
+
+        response = self.client.patch(
+            self.url,
+            {"maintenance_mode": True, "two_factor_code": code},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(SiteSettings.get_settings().maintenance_mode)
 
     def test_email_code_endpoint_no_longer_accepts_requests(self):
