@@ -233,6 +233,28 @@ def enroll_user(user, secret: str, code: str) -> list[str] | None:
     return recovery_codes
 
 
+def _accept_totp_code(profile: AdminTwoFactorProfile, code: str) -> bool:
+    secret = decrypt_secret(profile.encrypted_secret)
+    counter = _matching_counter(secret, code)
+    if counter is None or counter <= profile.last_used_counter:
+        return False
+
+    profile.last_used_counter = counter
+    profile.save(update_fields=["last_used_counter", "updated_at"])
+    return True
+
+
+@transaction.atomic
+def verify_totp_code(user, code: str) -> bool:
+    """Verify a fresh authenticator code without accepting recovery codes."""
+    try:
+        profile = AdminTwoFactorProfile.objects.select_for_update().get(user=user)
+    except AdminTwoFactorProfile.DoesNotExist:
+        return False
+
+    return _accept_totp_code(profile, code)
+
+
 @transaction.atomic
 def verify_user_code(user, code: str) -> bool:
     try:
@@ -240,13 +262,7 @@ def verify_user_code(user, code: str) -> bool:
     except AdminTwoFactorProfile.DoesNotExist:
         return False
 
-    secret = decrypt_secret(profile.encrypted_secret)
-    counter = _matching_counter(secret, code)
-    if counter is not None:
-        if counter <= profile.last_used_counter:
-            return False
-        profile.last_used_counter = counter
-        profile.save(update_fields=["last_used_counter", "updated_at"])
+    if _accept_totp_code(profile, code):
         return True
 
     normalized_recovery = str(code).strip().upper().replace("-", "")

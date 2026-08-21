@@ -1,22 +1,19 @@
-from rest_framework import viewsets, status
+from django.db import transaction
+from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
-from rest_framework.decorators import action
-from django.core.cache import cache
-from django.core.mail import send_mail
-from django.conf import settings
-import secrets
-from django.contrib.auth.hashers import check_password, make_password
+
+from accounts.two_factor import is_enabled_for_user, verify_totp_code
 
 from ..models import SiteSettings
 from ..serializers import SiteSettingsSerializer, PublicSiteSettingsSerializer
 
 class SiteSettingsViewSet(viewsets.ViewSet):
     """
-    ViewSet for site configuration protected by email OTP (5-minute expiry).
+    Site configuration protected by a fresh admin authenticator code.
     """
     def get_throttles(self):
-        self.throttle_scope = 'auth_password' if self.action in {'request_code', 'partial_update'} else None
+        self.throttle_scope = 'admin_2fa' if self.action == 'partial_update' else None
         return super().get_throttles()
     def get_permissions(self):
         if self.action == 'list':
@@ -37,73 +34,33 @@ class SiteSettingsViewSet(viewsets.ViewSet):
         serializer = serializer_class(settings_obj)
         return Response(serializer.data)
 
-    @action(detail=False, methods=['post'], url_path='request-code')
-    def request_code(self, request):
-        if not request.user.is_superuser:
-            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
-        
-        # Generate 6-digit code
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        
-        # Store in cache for 5 minutes (300 seconds)
-        cache_key = f"admin_settings_otp_{request.user.id}"
-        cache.set(cache_key, make_password(code), 300)
-        
-        # DEV MODE CONVENIENCE: Print to console
-        if settings.DEBUG:
-            print(f"=========================================")
-            print(f"🔒 DEV MODE - ADMIN OTP CODE: {code}")
-            print(f"=========================================")
-        
-        # Gather all superuser emails
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        superusers = User.objects.filter(is_superuser=True)
-        recipient_list = [user.email for user in superusers if user.email]
-        
-        # Fallback if no superusers have emails
-        if not recipient_list:
-            if hasattr(settings, 'EMAIL_HOST_USER') and settings.EMAIL_HOST_USER:
-                recipient_list = [settings.EMAIL_HOST_USER]
-            else:
-                recipient_list = ["support@sharptoolz.com"] # Standard fallback
-
-        # Send email
-        try:
-            from api.utils.email_service import EmailService
-            EmailService.send_admin_otp(recipient_list, request.user.username, request.user.email, code)
-            return Response({"message": "Verification code sent to email."})
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to send verification email: {str(e)}")
-            return Response({"error": "Failed to send verification email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+    @transaction.atomic
     def partial_update(self, request, pk=None):
         if not request.user.is_superuser:
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
 
         settings_obj = self.get_object()
-        
-        # Verification Step: OTP
-        otp = request.data.get('otp', '').strip()
 
-        # OTP Verification from cache
-        cache_key = f"admin_settings_otp_{request.user.id}"
-        cached_otp_hash = cache.get(cache_key)
-        
-        if not otp:
-            return Response({"error": "Verification code is required."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if not cached_otp_hash or not check_password(otp, cached_otp_hash):
-            return Response({"error": "Invalid or expired verification code."}, status=status.HTTP_403_FORBIDDEN)
-
-        # Clear OTP after successful use
-        cache.delete(cache_key)
-
-        # Apply updates
-        serializer = SiteSettingsSerializer(settings_obj, data=request.data, partial=True)
+        two_factor_code = str(request.data.get('two_factor_code', '')).strip()
+        if not two_factor_code:
+            return Response(
+                {"error": "Authenticator code is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not is_enabled_for_user(request.user):
+            return Response(
+                {"error": "Two-factor authentication is not configured for this admin account."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        settings_data = request.data.copy()
+        settings_data.pop('two_factor_code', None)
+        serializer = SiteSettingsSerializer(settings_obj, data=settings_data, partial=True)
         if serializer.is_valid():
+            if not verify_totp_code(request.user, two_factor_code):
+                return Response(
+                    {"error": "Invalid or already-used authenticator code."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             serializer.save()
             
             # Log action
@@ -113,7 +70,7 @@ class SiteSettingsViewSet(viewsets.ViewSet):
                 action="UPDATE_SETTINGS",
                 target="Site Settings",
                 ip_address=request.META.get('REMOTE_ADDR'),
-                details={key: value for key, value in request.data.items() if key != 'otp'}
+                details={key: value for key, value in settings_data.items()}
             )
             
             return Response(serializer.data)

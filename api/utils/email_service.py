@@ -86,16 +86,6 @@ class EmailService:
         return cls._send_email(subject, 'emails/auth/password_reset.html', context, [email])
 
     @classmethod
-    def send_admin_otp(cls, recipient_list, username, email, code):
-        subject = "SECURITY ALERT: Admin Settings Modification Attempt"
-        context = {
-            'username': username,
-            'email': email,
-            'code': code
-        }
-        return cls._send_email(subject, 'emails/admin/security_otp.html', context, recipient_list)
-
-    @classmethod
     def send_welcome_email(cls, user):
         subject = "🚀 Welcome to SharpToolz - Your Creative Suite Awaits"
         context = {
