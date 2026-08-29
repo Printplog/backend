@@ -23,6 +23,14 @@ app.conf.beat_schedule = {
         "task": "wallet.tasks.expire_deposit_bonuses",
         "schedule": crontab(minute=0),  # hourly
     },
+    "wallet-check-revenue-distribution": {
+        "task": "wallet.tasks.check_revenue_distribution",
+        "schedule": crontab(minute="*"),
+    },
+    "wallet-reconcile-revenue-distributions": {
+        "task": "wallet.tasks.reconcile_revenue_distributions",
+        "schedule": crontab(minute="*/2"),
+    },
     "api-cleanup-expired-renders": {
         "task": "api.tasks.cleanup_expired_document_renders",
         "schedule": crontab(minute=20),

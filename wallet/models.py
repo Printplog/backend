@@ -190,6 +190,256 @@ class WithdrawalRequest(models.Model):
         return f"{self.user.username} - {self.amount} ({self.status})"
 
 
+class CPayDepositRoute(models.Model):
+    """One freshly generated CPay client wallet for a deposit."""
+
+    class RouteType(models.TextChoices):
+        DIRECT = "cpay", "Legacy CPay direct"
+        CRYPTAPI_BRIDGE = "cryptapi_cpay", "CryptAPI to CPay bridge"
+
+    class Status(models.TextChoices):
+        CREATED = "created", "Created"
+        FORWARDED = "forwarded", "Forwarded"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    transaction = models.OneToOneField(
+        Transaction,
+        on_delete=models.CASCADE,
+        related_name="cpay_route",
+    )
+    route_type = models.CharField(
+        max_length=24,
+        choices=RouteType.choices,
+        default=RouteType.CRYPTAPI_BRIDGE,
+    )
+    client_reference = models.CharField(max_length=64, unique=True)
+    cpay_wallet_id = models.CharField(max_length=128, unique=True)
+    cpay_address = models.CharField(max_length=128, unique=True)
+    encrypted_passphrase = models.TextField()
+    encrypted_callback_nonce = models.TextField(blank=True, default="")
+    # Encrypted because the URL contains the per-payment callback nonce.
+    cryptapi_callback_url = models.TextField(blank=True, default="")
+    cryptapi_address_in = models.CharField(max_length=128, blank=True)
+    cryptapi_callback_id = models.CharField(max_length=128, blank=True)
+    cryptapi_txid_in = models.CharField(max_length=255, blank=True)
+    cryptapi_txid_out = models.CharField(max_length=255, blank=True)
+    cpay_transaction_id = models.CharField(max_length=128, blank=True)
+    cpay_tx_hash = models.CharField(max_length=255, blank=True)
+    forwarded_amount = models.DecimalField(max_digits=18, decimal_places=6, default=Decimal("0"))
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.CREATED)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cryptapi_callback_id"],
+                condition=~models.Q(cryptapi_callback_id=""),
+                name="unique_nonempty_cryptapi_callback_id",
+            ),
+            models.UniqueConstraint(
+                fields=["cryptapi_txid_in"],
+                condition=~models.Q(cryptapi_txid_in=""),
+                name="unique_nonempty_cryptapi_txid_in",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_id} -> {self.cpay_address}"
+
+
+class CryptAPIWebhookEvent(models.Model):
+    """Immutable idempotency receipt for each confirmed CryptAPI callback."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    route = models.ForeignKey(CPayDepositRoute, on_delete=models.PROTECT, related_name="webhook_events")
+    callback_id = models.CharField(max_length=128, unique=True)
+    txid_in = models.CharField(max_length=255, unique=True)
+    txid_out = models.CharField(max_length=255, blank=True)
+    amount_forwarded = models.DecimalField(max_digits=18, decimal_places=6)
+    credited_transaction = models.OneToOneField(
+        Transaction,
+        on_delete=models.PROTECT,
+        related_name="cryptapi_event",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.callback_id}: {self.amount_forwarded}"
+
+
+class CPayWebhookEvent(models.Model):
+    """Idempotency receipt for a provider-verified CPay direct deposit."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    route = models.ForeignKey(CPayDepositRoute, on_delete=models.PROTECT, related_name="cpay_webhook_events")
+    provider_transaction_id = models.CharField(max_length=128, unique=True)
+    tx_hash = models.CharField(max_length=255, blank=True)
+    amount = models.DecimalField(max_digits=18, decimal_places=6)
+    credited_transaction = models.OneToOneField(
+        Transaction,
+        on_delete=models.PROTECT,
+        related_name="cpay_event",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tx_hash"],
+                condition=~models.Q(tx_hash=""),
+                name="unique_nonempty_cpay_tx_hash",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.provider_transaction_id}: {self.amount}"
+
+
+class RevenueDistributionConfig(models.Model):
+    """Singleton operational policy; provider credentials remain in env."""
+
+    enabled = models.BooleanField(default=False)
+    threshold_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("100.00"))
+    last_available_balance = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    last_balance_checked_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(threshold_amount__gt=0),
+                name="revenue_distribution_threshold_positive",
+            ),
+        ]
+
+    @classmethod
+    def get_config(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return f"Revenue distribution (${self.threshold_amount})"
+
+
+class RevenueShareRecipient(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120)
+    email = models.EmailField()
+    bep20_address = models.CharField(max_length=42)
+    percentage = models.DecimalField(max_digits=5, decimal_places=2)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at", "name"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(percentage__gt=0) & models.Q(percentage__lte=100),
+                name="revenue_recipient_percentage_valid",
+            ),
+            models.UniqueConstraint(
+                fields=["email"],
+                condition=models.Q(is_active=True),
+                name="unique_active_revenue_recipient_email",
+            ),
+            models.UniqueConstraint(
+                fields=["bep20_address"],
+                condition=models.Q(is_active=True),
+                name="unique_active_revenue_recipient_address",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.percentage}%)"
+
+
+class RevenueDistributionBatch(models.Model):
+    class Status(models.TextChoices):
+        PREPARING = "preparing", "Preparing"
+        SENDING = "sending", "Sending"
+        SUBMITTED = "submitted", "Submitted"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    amount = models.DecimalField(max_digits=18, decimal_places=6)
+    threshold_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_before = models.DecimalField(max_digits=18, decimal_places=6)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PREPARING)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["status", "-created_at"])]
+
+    def __str__(self):
+        return f"${self.amount} ({self.status})"
+
+
+class RevenueDistributionPayout(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SUBMITTED = "submitted", "Submitted"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch = models.ForeignKey(
+        RevenueDistributionBatch,
+        on_delete=models.CASCADE,
+        related_name="payouts",
+    )
+    recipient = models.ForeignKey(
+        RevenueShareRecipient,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payouts",
+    )
+    recipient_name = models.CharField(max_length=120)
+    recipient_email = models.EmailField()
+    bep20_address = models.CharField(max_length=42)
+    percentage = models.DecimalField(max_digits=5, decimal_places=2)
+    amount = models.DecimalField(max_digits=18, decimal_places=6)
+    idempotency_key = models.CharField(max_length=128, unique=True)
+    provider_transaction_id = models.CharField(max_length=128, blank=True)
+    transaction_hash = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    error_message = models.TextField(blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    email_sent_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider_transaction_id"],
+                condition=~models.Q(provider_transaction_id=""),
+                name="unique_nonempty_cpay_payout_transaction",
+            ),
+        ]
+        indexes = [models.Index(fields=["status", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.recipient_email}: {self.amount} USDT ({self.status})"
+
+
 class DepositBonus(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"

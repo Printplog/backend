@@ -73,9 +73,38 @@ DB_CONNECT_TIMEOUT = env_int("DB_CONNECT_TIMEOUT", 10)
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-+#ds1yk1fdrx$=3&yf+!q$r9sy!l$vjl8ea@_fhya_t3(okl!p')
 API_KEY_PEPPER = os.getenv("API_KEY_PEPPER", "" if IS_PRODUCTION else SECRET_KEY)
 ADMIN_2FA_ENCRYPTION_KEY = os.getenv("ADMIN_2FA_ENCRYPTION_KEY", SECRET_KEY)
+PAYMENT_ENCRYPTION_KEY = os.getenv("PAYMENT_ENCRYPTION_KEY", SECRET_KEY)
 ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "SharpToolz")
 ADMIN_2FA_CHALLENGE_SECONDS = env_int("ADMIN_2FA_CHALLENGE_SECONDS", 600)
 ADMIN_2FA_MAX_ATTEMPTS = env_int("ADMIN_2FA_MAX_ATTEMPTS", 5)
+
+# CryptAPI generates the customer address and forwards confirmed BEP20 USDT to
+# a fresh CPay wallet for treasury collection and later revenue distribution.
+CRYPTAPI_BASE_URL = os.getenv("CRYPTAPI_BASE_URL", "https://api.cryptapi.io")
+CRYPTAPI_TICKER = os.getenv("CRYPTAPI_TICKER", "bep20/usdt")
+CRYPTAPI_CALLBACK_BASE_URL = os.getenv(
+    "CRYPTAPI_CALLBACK_BASE_URL",
+    "https://api.sharptoolz.com/api/webhook/cryptapi/",
+)
+CRYPTAPI_LEGACY_CALLBACK_SECRET = os.getenv("CRYPTAPI_LEGACY_CALLBACK_SECRET", "")
+CRYPTAPI_REQUIRE_SIGNATURE = env_bool("CRYPTAPI_REQUIRE_SIGNATURE", True)
+CRYPTAPI_TIMEOUT_SECONDS = env_int("CRYPTAPI_TIMEOUT_SECONDS", 10)
+
+# CPay provider credentials are environment-only. Deposits and treasury payouts
+# remain separate capabilities so deposit testing cannot implicitly move funds.
+CPAY_BASE_URL = os.getenv("CPAY_BASE_URL", "https://api.cpay.world")
+CPAY_PUBLIC_KEY = os.getenv("CPAY_PUBLIC_KEY", "")
+CPAY_PRIVATE_KEY = os.getenv("CPAY_PRIVATE_KEY", "")
+CPAY_BEP20_USDT_CURRENCY_ID = os.getenv("CPAY_BEP20_USDT_CURRENCY_ID", "")
+CPAY_PAYOUT_WALLET_ID = os.getenv("CPAY_PAYOUT_WALLET_ID", "")
+CPAY_PAYOUT_WALLET_PASSPHRASE = os.getenv("CPAY_PAYOUT_WALLET_PASSPHRASE", "")
+CPAY_PAYOUT_WALLET_PASSWORD = os.getenv("CPAY_PAYOUT_WALLET_PASSWORD", "")
+CPAY_PAYOUT_SIGNATURE = os.getenv("CPAY_PAYOUT_SIGNATURE", "")
+# Operational kill switch for the fixed CryptAPI -> CPay deposit bridge.
+CPAY_DEPOSIT_ROUTING_ENABLED = env_bool("CPAY_DEPOSIT_ROUTING_ENABLED", False)
+CPAY_LIVE_PAYOUTS_ENABLED = env_bool("CPAY_LIVE_PAYOUTS_ENABLED", False)
+CPAY_TIMEOUT_SECONDS = env_int("CPAY_TIMEOUT_SECONDS", 15)
+CPAY_MAX_TRANCHES_PER_RUN = env_int("CPAY_MAX_TRANCHES_PER_RUN", 10)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "False") == "True" if IS_PRODUCTION else True
@@ -618,8 +647,12 @@ if IS_PRODUCTION:
     )
     weak_api_pepper = len(API_KEY_PEPPER) < 50 or len(set(API_KEY_PEPPER)) < 8
     weak_admin_2fa_key = len(ADMIN_2FA_ENCRYPTION_KEY) < 50 or len(set(ADMIN_2FA_ENCRYPTION_KEY)) < 8
-    if weak_secret or weak_signing_key or weak_api_pepper or weak_admin_2fa_key:
-        raise RuntimeError("SECRET_KEY, JWT_SIGNING_KEY, API_KEY_PEPPER, and ADMIN_2FA_ENCRYPTION_KEY must be strong production secrets")
+    weak_payment_key = len(PAYMENT_ENCRYPTION_KEY) < 50 or len(set(PAYMENT_ENCRYPTION_KEY)) < 8
+    if weak_secret or weak_signing_key or weak_api_pepper or weak_admin_2fa_key or weak_payment_key:
+        raise RuntimeError(
+            "SECRET_KEY, JWT_SIGNING_KEY, API_KEY_PEPPER, ADMIN_2FA_ENCRYPTION_KEY, "
+            "and PAYMENT_ENCRYPTION_KEY must be strong production secrets"
+        )
 
 SITE_ID = 1
 

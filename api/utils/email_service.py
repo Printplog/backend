@@ -146,6 +146,33 @@ class EmailService:
         return cls._send_email(subject, 'emails/wallet/purchase_receipt.html', context, [user.email])
 
     @classmethod
+    def send_revenue_distribution_payout(
+        cls,
+        *,
+        recipient_name,
+        recipient_email,
+        amount,
+        percentage,
+        transaction_id,
+        transaction_hash,
+    ):
+        subject = f"Revenue payout sent: {amount:,.2f} USDT"
+        context = {
+            'recipient_name': recipient_name,
+            'amount': f"{amount:,.2f}",
+            'percentage': f"{percentage:,.2f}",
+            'transaction_id': transaction_id,
+            'transaction_hash': transaction_hash,
+            'network': 'BNB Smart Chain (BEP20)',
+        }
+        return cls._send_email(
+            subject,
+            'emails/wallet/revenue_distribution.html',
+            context,
+            [recipient_email],
+        )
+
+    @classmethod
     def send_referral_reminder(cls, friend_email, friend_name, referrer_name):
         subject = f"🎁 {referrer_name} sent you a 10% Cash Bonus!"
         context = {

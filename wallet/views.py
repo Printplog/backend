@@ -1,19 +1,34 @@
-import requests
+import hmac
+import logging
+import secrets
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import timedelta
 
+from django.conf import settings as django_settings
+from django.db import IntegrityError, transaction
+from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.urls import reverse
+from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 
-from wallet.models import Transaction
+from wallet.models import CPayDepositRoute, CPayWebhookEvent, CryptAPIWebhookEvent, Transaction
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from wallet.serializers import WalletSerializer
 from api.models import SiteSettings
+from wallet.provider_security import (
+    PaymentSecretError,
+    decrypt_cpay_callback,
+    decrypt_payment_secret,
+    encrypt_payment_secret,
+)
+from wallet.providers import CPayClient, CryptAPIClient, PaymentProviderError, verify_cryptapi_signature
+
+
+logger = logging.getLogger(__name__)
 
 
 def send_wallet_update(user, new_payment):
@@ -47,6 +62,8 @@ def send_wallet_update(user, new_payment):
   
 
 class WalletDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         wallet = request.user.wallet
         serializer = WalletSerializer(wallet)
@@ -54,8 +71,7 @@ class WalletDetailView(APIView):
 
  
 class CreateCryptoPaymentView(APIView):
-    TICKER = "bep20/usdt"
-    CALLBACK_SECRET = "your_callback_secret_here"
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         if not request.user.is_authenticated:
@@ -74,63 +90,79 @@ class CreateCryptoPaymentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        wallet = request.user.wallet
-        # Fetch dynamic receiving address from SiteSettings
-        settings_obj = SiteSettings.get_settings()
-        receiving_address = settings_obj.crypto_address or "0x8482a1d4716736bf3b71736fafac9e8cd679fae8"
-
-        # Generate a unique UUID per transaction
         tx_id = uuid.uuid4()
-
-        # Build a unique callback URL per request
-        callback_url = (
-            "https://api.sharptoolz.com/api/webhook/cryptapi/"
-            f"?secret={self.CALLBACK_SECRET}&uuid={tx_id}"
-        )
-
-        cryptapi_url = f"https://api.cryptapi.io/{self.TICKER}/create/"
-        params = {
-            "callback": callback_url,
-            "address": receiving_address,
-            "confirmations": "1",
-            "pending": "0",
-            "post": "1",
-            "json": "1",
-            "priority": "default",
-        }
-
-        try: 
-            res = requests.get(cryptapi_url, params=params, timeout=10)
-            res.raise_for_status()
-            data = res.json()
-        except Exception as e:
-            return Response({"detail": "CryptAPI error", "error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
-
-        if "address_in" not in data:
-            return Response({"detail": "Invalid response from CryptAPI"}, status=status.HTTP_502_BAD_GATEWAY)
-
-        wallet = request.user.wallet
         tx = Transaction.objects.create(
-            wallet=wallet,
+            wallet=request.user.wallet,
             type=Transaction.Type.DEPOSIT,
             status=Transaction.Status.PENDING,
-            amount=Decimal("0.00"),  # Amount is initially zero
-            address=data["address_in"],
-            tx_id=tx_id,  # ← Save UUID
-            description="Wallet Funding"
+            amount=Decimal("0.00"),
+            tx_id=tx_id,
+            description="Wallet Funding",
         )
+
+        try:
+            if not django_settings.CPAY_DEPOSIT_ROUTING_ENABLED:
+                raise PaymentProviderError("CryptAPI to CPay deposit routing is disabled.")
+            if not CPayClient.deposit_configured():
+                raise PaymentProviderError("CPay deposits are not configured.")
+            if not django_settings.CRYPTAPI_CALLBACK_BASE_URL:
+                raise PaymentProviderError("CryptAPI callbacks are not configured.")
+
+            cpay_wallet = CPayClient().create_client_wallet()
+            callback_nonce = secrets.token_urlsafe(32)
+            separator = "&" if "?" in django_settings.CRYPTAPI_CALLBACK_BASE_URL else "?"
+            callback_url = (
+                f"{django_settings.CRYPTAPI_CALLBACK_BASE_URL}{separator}"
+                f"payment={tx_id}&nonce={callback_nonce}"
+            )
+            route = CPayDepositRoute.objects.create(
+                transaction=tx,
+                route_type=CPayDepositRoute.RouteType.CRYPTAPI_BRIDGE,
+                client_reference=str(tx_id),
+                cpay_wallet_id=cpay_wallet["id"],
+                cpay_address=cpay_wallet["address"],
+                encrypted_passphrase=encrypt_payment_secret(cpay_wallet["passphrase"]),
+                encrypted_callback_nonce=encrypt_payment_secret(callback_nonce),
+                cryptapi_callback_url=encrypt_payment_secret(callback_url),
+            )
+            data = CryptAPIClient().create_address(
+                destination_address=cpay_wallet["address"],
+                callback_url=callback_url,
+            )
+            payment_address = data["address_in"]
+            route.cryptapi_address_in = payment_address
+            route.save(update_fields=["cryptapi_address_in", "updated_at"])
+        except PaymentProviderError:
+            logger.exception("Payment route creation failed for transaction %s", tx_id)
+            tx.status = Transaction.Status.FAILED
+            tx.description = "Deposit route creation failed"
+            tx.save(update_fields=["status", "description"])
+            if hasattr(tx, "cpay_route"):
+                tx.cpay_route.status = CPayDepositRoute.Status.FAILED
+                tx.cpay_route.save(update_fields=["status", "updated_at"])
+            return Response(
+                {"detail": "The secure deposit address could not be created. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        tx.address = payment_address
+        tx.save(update_fields=["address"])
         
         send_wallet_update(request.user, False)
 
         return Response({
             "transaction_id": str(tx.id),
-            "ticker": self.TICKER,
-            "payment_address": data["address_in"],
-            "tx_id": tx.tx_id,  # ← Include tx_id in the response
+            "ticker": django_settings.CRYPTAPI_TICKER,
+            "payment_address": payment_address,
+            "tx_id": tx.tx_id,
+            "network": "BEP20",
+            "gateway": "cryptapi_cpay",
         }, status=status.HTTP_201_CREATED)
 
 
 class CancelCryptoPaymentView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
         tx_id = request.data.get("id")
         if not tx_id:
@@ -139,9 +171,162 @@ class CancelCryptoPaymentView(APIView):
             tx = Transaction.objects.get(id=tx_id, wallet=request.user.wallet, status=Transaction.Status.PENDING)
         except Transaction.DoesNotExist:
             return Response({"detail": "Pending transaction not found."}, status=status.HTTP_404_NOT_FOUND)
-        tx.delete()
+        tx.status = Transaction.Status.FAILED
+        tx.description = "Deposit cancelled"
+        tx.save(update_fields=["status", "description"])
         send_wallet_update(request.user, False)
         return Response({"detail": "Transaction cancelled successfully."}, status=status.HTTP_200_OK)
+
+
+class CPayWebhookView(APIView):
+    """Receive encrypted CPay events and credit only provider-verified deposits."""
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "wallet_write"
+
+    def post(self, request):
+        try:
+            wallet_id, payload = decrypt_cpay_callback(
+                request.headers.get("Authorization", ""),
+                request.data.get("data") if isinstance(request.data, dict) else "",
+            )
+        except PaymentSecretError:
+            logger.warning("Rejected an invalid CPay callback envelope")
+            return Response({"status": "ERROR"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            route = CPayDepositRoute.objects.select_related("transaction__wallet__user").get(
+                cpay_wallet_id=wallet_id,
+                route_type=CPayDepositRoute.RouteType.DIRECT,
+            )
+        except CPayDepositRoute.DoesNotExist:
+            # The account callback also receives payout and old-wallet events.
+            return Response({"status": "OK", "ignored": True})
+
+        provider_transaction_id = str(payload.get("orderId") or "").strip()
+        event_type = str(payload.get("typeTransaction") or "").strip()
+        callback_status = str(payload.get("systemStatus") or "").strip()
+        callback_wallet_id = str((payload.get("wallet") or {}).get("id") or "").strip()
+        if not provider_transaction_id or event_type != "Replenishment" or callback_wallet_id != wallet_id:
+            return Response({"status": "OK", "ignored": True})
+        if callback_status != "Done" or payload.get("status") is not True:
+            return Response({"status": "OK", "pending": True})
+        if CPayWebhookEvent.objects.filter(provider_transaction_id=provider_transaction_id).exists():
+            return Response({"status": "OK"})
+
+        try:
+            entity = CPayClient().find_transaction(
+                provider_transaction_id,
+                wallet_id=route.cpay_wallet_id,
+                passphrase=decrypt_payment_secret(route.encrypted_passphrase),
+            )
+        except (PaymentProviderError, PaymentSecretError):
+            logger.exception("Could not verify CPay transaction %s", provider_transaction_id)
+            return Response({"status": "RETRY"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not entity:
+            return Response({"status": "RETRY"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        info = entity.get("info") or {}
+        entity_id = str(entity.get("_id") or entity.get("id") or "")
+        from_wallet_id = str(info.get("fromId") or "")
+        if (
+            entity_id != provider_transaction_id
+            or entity.get("type") != "Replenishment"
+            or entity.get("systemStatus") != "Done"
+            or entity.get("status") is not True
+            or str(info.get("currencyId") or "") != django_settings.CPAY_BEP20_USDT_CURRENCY_ID
+            or str(info.get("currency") or "").upper() != "USDT"
+            or str(info.get("nodeType") or "").lower() != "bsc"
+            or (from_wallet_id and from_wallet_id != route.cpay_wallet_id)
+        ):
+            logger.warning("CPay callback did not match the stored deposit route")
+            return Response({"status": "ERROR"}, status=status.HTTP_400_BAD_REQUEST)
+
+        callback_incoming_hash = str(payload.get("incomingTxHash") or "").strip()
+        provider_incoming_hash = str(info.get("incomingTxHash") or "").strip()
+        if callback_incoming_hash and provider_incoming_hash and callback_incoming_hash != provider_incoming_hash:
+            return Response({"status": "ERROR"}, status=status.HTTP_400_BAD_REQUEST)
+        tx_hash = provider_incoming_hash or callback_incoming_hash
+        if not tx_hash:
+            hashes = info.get("hashs") or []
+            tx_hash = str(hashes[-1]) if hashes else str(payload.get("hash") or "").strip()
+
+        try:
+            raw_amount = (info.get("amount") or {}).get("value")
+            amount = Decimal(str(raw_amount)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({"status": "ERROR"}, status=status.HTTP_400_BAD_REQUEST)
+        if amount <= 0:
+            return Response({"status": "ERROR"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            credited_tx, wallet = self._credit_route(
+                route_id=route.id,
+                provider_transaction_id=provider_transaction_id,
+                tx_hash=tx_hash,
+                amount=amount,
+            )
+        except IntegrityError:
+            return Response({"status": "OK"})
+        if credited_tx is not None:
+            send_wallet_update(wallet.user, True)
+            transaction.on_commit(self._queue_distribution_check)
+        return Response({"status": "OK"})
+
+    @staticmethod
+    @transaction.atomic
+    def _credit_route(*, route_id, provider_transaction_id, tx_hash, amount):
+        if CPayWebhookEvent.objects.filter(provider_transaction_id=provider_transaction_id).exists():
+            return None, None
+
+        route = CPayDepositRoute.objects.select_for_update().select_related(
+            "transaction__wallet__user"
+        ).get(pk=route_id, route_type=CPayDepositRoute.RouteType.DIRECT)
+        wallet = route.transaction.wallet
+        if route.transaction.status == Transaction.Status.PENDING:
+            credited_tx = route.transaction
+            credited_tx.status = Transaction.Status.COMPLETED
+            credited_tx.tx_hash = tx_hash
+            credited_tx.amount = amount
+            credited_tx.save(update_fields=["status", "tx_hash", "amount"])
+        elif route.transaction.status == Transaction.Status.FAILED:
+            credited_tx = Transaction.objects.create(
+                wallet=wallet,
+                type=Transaction.Type.DEPOSIT,
+                status=Transaction.Status.COMPLETED,
+                amount=amount,
+                tx_hash=tx_hash,
+                address=route.cpay_address,
+                description="Late CPay wallet funding",
+            )
+        else:
+            logger.error("Refusing to credit an already-completed CPay route without an event receipt")
+            return None, None
+
+        wallet.credit(amount, create_transaction=False)
+        CPayWebhookEvent.objects.create(
+            route=route,
+            provider_transaction_id=provider_transaction_id,
+            tx_hash=tx_hash,
+            amount=amount,
+            credited_transaction=credited_tx,
+        )
+        route.cpay_transaction_id = provider_transaction_id
+        route.cpay_tx_hash = tx_hash
+        route.forwarded_amount = route.forwarded_amount + amount
+        route.status = CPayDepositRoute.Status.FORWARDED
+        route.save(update_fields=[
+            "cpay_transaction_id", "cpay_tx_hash", "forwarded_amount", "status", "updated_at",
+        ])
+        _apply_deposit_rewards(wallet, amount, credited_tx)
+        return credited_tx, wallet
+
+    @staticmethod
+    def _queue_distribution_check():
+        from wallet.tasks import check_revenue_distribution
+
+        check_revenue_distribution.apply_async(countdown=60)
 
 
 
@@ -149,100 +334,216 @@ class CryptAPIWebhookView(APIView):
     authentication_classes = []
     permission_classes = []
 
-    CALLBACK_SECRET = "your_callback_secret_here"
-
     def post(self, request):
-        secret = request.query_params.get("secret")
-        uuid_ = request.query_params.get("uuid")  # ← Get UUID from query
-        address = request.data.get("address_in")
-        txid_in = request.data.get("txid_in")
-        value_forwarded_coin = request.data.get("value_forwarded_coin")
-        value_coin = request.data.get("value_coin")
-        confirmations = int(request.data.get("confirmations", 0))
-        required_confirmations = int(request.data.get("required_confirmations", 1))
-        pending = int(request.data.get("pending", 1))
+        raw_body = request.body
+        if django_settings.CRYPTAPI_REQUIRE_SIGNATURE:
+            signature = request.headers.get("x-ca-signature", "")
+            if not verify_cryptapi_signature(raw_body, signature):
+                logger.warning("Rejected CryptAPI callback with an invalid signature")
+                return Response({"detail": "Invalid webhook signature."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        if secret != self.CALLBACK_SECRET or not uuid_:
-            return Response({"detail": "Invalid secret or UUID."}, status=status.HTTP_403_FORBIDDEN)
+        payment_id = str(request.query_params.get("payment") or "").strip()
+        nonce = str(request.query_params.get("nonce") or "").strip()
+        if not payment_id or not nonce:
+            return self._legacy_callback(request)
 
-        if not all([address, txid_in, value_forwarded_coin]):
-            return Response({"detail": "Missing required fields."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            route = CPayDepositRoute.objects.select_related("transaction__wallet__user").get(
+                transaction__tx_id=payment_id,
+                route_type=CPayDepositRoute.RouteType.CRYPTAPI_BRIDGE,
+            )
+        except CPayDepositRoute.DoesNotExist:
+            return Response({"detail": "Payment route not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        expected_nonce = decrypt_payment_secret(route.encrypted_callback_nonce)
+        if not hmac.compare_digest(nonce, expected_nonce):
+            return Response({"detail": "Invalid callback nonce."}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = request.data
+        callback_id = str(payload.get("uuid") or "").strip()
+        address_in = str(payload.get("address_in") or "").strip()
+        address_out = str(payload.get("address_out") or "").strip()
+        txid_in = str(payload.get("txid_in") or "").strip()
+        txid_out = str(payload.get("txid_out") or "").strip()
+        coin = str(payload.get("coin") or "").strip().lower()
+        expected_coin = django_settings.CRYPTAPI_TICKER.replace("/", "_").lower()
+
+        try:
+            pending = int(payload.get("pending", 1))
+            confirmations = int(payload.get("confirmations", 0))
+            required_confirmations = int(payload.get("required_confirmations", 1))
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid confirmation values."}, status=status.HTTP_400_BAD_REQUEST)
 
         if pending != 0 or confirmations < required_confirmations:
-            return Response({"detail": "Awaiting confirmation."}, status=status.HTTP_202_ACCEPTED)
+            return HttpResponse("*ok*", content_type="text/plain")
+
+        if not all([
+            callback_id,
+            address_in,
+            address_out,
+            txid_in,
+            txid_out,
+            payload.get("value_forwarded_coin"),
+        ]):
+            return Response({"detail": "Missing required callback fields."}, status=status.HTTP_400_BAD_REQUEST)
+        if coin and coin != expected_coin:
+            return Response({"detail": "Unexpected payment currency."}, status=status.HTTP_400_BAD_REQUEST)
+        if address_in != route.cryptapi_address_in or address_out.lower() != route.cpay_address.lower():
+            return Response({"detail": "Payment route does not match."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            tx = Transaction.objects.select_related('wallet').get(
-                tx_id=uuid_,
-                status=Transaction.Status.PENDING,
-                type=Transaction.Type.DEPOSIT
+            credited_amount = Decimal(str(payload["value_forwarded_coin"])).quantize(
+                Decimal("0.01"), rounding=ROUND_DOWN
             )
-        except Transaction.DoesNotExist:
-            return Response({"detail": "Transaction not found or already processed."}, status=status.HTTP_404_NOT_FOUND)
-
-        if tx.tx_hash:
-            return Response({"detail": "Transaction already confirmed."}, status=status.HTTP_200_OK)
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({"detail": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
+        if credited_amount <= 0:
+            return Response({"detail": "Forwarded amount is too small to credit."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            amount_decimal = Decimal(value_forwarded_coin)
-            # SMART ROUNDING: If fractional part >= 0.9, round up to the nearest whole number
-            # Examples: 6.90 -> 7, 6.99 -> 7, 6.89 -> 6.89
-            if amount_decimal % 1 >= Decimal('0.9'):
-                amount_decimal = amount_decimal.quantize(Decimal('1'), rounding='ROUND_CEILING')
-            credited_amount = amount_decimal
-        except Exception:
+            credited_tx, wallet = self._credit_route(
+                route_id=route.id,
+                callback_id=callback_id,
+                txid_in=txid_in,
+                txid_out=txid_out,
+                amount=credited_amount,
+            )
+        except IntegrityError:
+            return HttpResponse("*ok*", content_type="text/plain")
+
+        if credited_tx is not None:
+            send_wallet_update(wallet.user, True)
+            transaction.on_commit(self._queue_distribution_check)
+        return HttpResponse("*ok*", content_type="text/plain")
+
+    @staticmethod
+    @transaction.atomic
+    def _credit_route(*, route_id, callback_id, txid_in, txid_out, amount):
+        if CryptAPIWebhookEvent.objects.filter(callback_id=callback_id).exists():
+            return None, None
+
+        route = CPayDepositRoute.objects.select_for_update().select_related(
+            "transaction__wallet__user"
+        ).get(pk=route_id, route_type=CPayDepositRoute.RouteType.CRYPTAPI_BRIDGE)
+        wallet = route.transaction.wallet
+        if route.transaction.status == Transaction.Status.PENDING:
+            credited_tx = route.transaction
+            credited_tx.status = Transaction.Status.COMPLETED
+            credited_tx.tx_hash = txid_in
+            credited_tx.amount = amount
+            credited_tx.save(update_fields=["status", "tx_hash", "amount"])
+        else:
+            credited_tx = Transaction.objects.create(
+                wallet=wallet,
+                type=Transaction.Type.DEPOSIT,
+                status=Transaction.Status.COMPLETED,
+                amount=amount,
+                tx_hash=txid_in,
+                address=route.cryptapi_address_in,
+                description="Additional wallet funding",
+            )
+
+        wallet.credit(amount, create_transaction=False)
+        CryptAPIWebhookEvent.objects.create(
+            route=route,
+            callback_id=callback_id,
+            txid_in=txid_in,
+            txid_out=txid_out,
+            amount_forwarded=amount,
+            credited_transaction=credited_tx,
+        )
+        route.cryptapi_callback_id = callback_id
+        route.cryptapi_txid_in = txid_in
+        route.cryptapi_txid_out = txid_out
+        route.forwarded_amount = route.forwarded_amount + amount
+        route.status = CPayDepositRoute.Status.FORWARDED
+        route.save(update_fields=[
+            "cryptapi_callback_id", "cryptapi_txid_in", "cryptapi_txid_out",
+            "forwarded_amount", "status", "updated_at",
+        ])
+        _apply_deposit_rewards(wallet, amount, credited_tx)
+        return credited_tx, wallet
+
+    @staticmethod
+    def _queue_distribution_check():
+        from wallet.tasks import check_revenue_distribution
+
+        check_revenue_distribution.apply_async(countdown=60)
+
+    def _legacy_callback(self, request):
+        """Keep pre-CPay pending addresses serviceable during the rollout."""
+        secret = str(request.query_params.get("secret") or "")
+        tx_id = str(request.query_params.get("uuid") or "")
+        configured = django_settings.CRYPTAPI_LEGACY_CALLBACK_SECRET
+        if not configured or not hmac.compare_digest(secret, configured) or not tx_id:
+            return Response({"detail": "Invalid callback route."}, status=status.HTTP_403_FORBIDDEN)
+        payload = request.data
+        try:
+            pending = int(payload.get("pending", 1))
+            confirmations = int(payload.get("confirmations", 0))
+            required = int(payload.get("required_confirmations", 1))
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid confirmation values."}, status=status.HTTP_400_BAD_REQUEST)
+        if pending != 0 or confirmations < required:
+            return HttpResponse("*ok*", content_type="text/plain")
+        try:
+            amount = Decimal(str(payload.get("value_forwarded_coin"))).quantize(
+                Decimal("0.01"), rounding=ROUND_DOWN
+            )
+        except (InvalidOperation, TypeError, ValueError):
             return Response({"detail": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
+        if amount <= 0:
+            return Response({"detail": "Forwarded amount is too small to credit."}, status=status.HTTP_400_BAD_REQUEST)
 
-        tx.status = Transaction.Status.COMPLETED
-        tx.tx_hash = txid_in
-        tx.amount = credited_amount # Save the final credited amount (rounded) to the transaction
-        tx.save()
-        
-        # Credit the wallet WITHOUT creating a duplicate transaction record
-        tx.wallet.credit(credited_amount, create_transaction=False)
+        with transaction.atomic():
+            try:
+                tx = Transaction.objects.select_for_update().select_related("wallet__user").get(
+                    tx_id=tx_id,
+                    type=Transaction.Type.DEPOSIT,
+                )
+            except Transaction.DoesNotExist:
+                return Response({"detail": "Payment not found."}, status=status.HTTP_404_NOT_FOUND)
+            if tx.status == Transaction.Status.COMPLETED:
+                return HttpResponse("*ok*", content_type="text/plain")
+            if str(payload.get("address_in") or "") != tx.address:
+                return Response({"detail": "Payment address does not match."}, status=status.HTTP_400_BAD_REQUEST)
+            tx.status = Transaction.Status.COMPLETED
+            tx.amount = amount
+            tx.tx_hash = str(payload.get("txid_in") or "")
+            tx.save(update_fields=["status", "amount", "tx_hash"])
+            tx.wallet.credit(amount, create_transaction=False)
+            _apply_deposit_rewards(tx.wallet, amount, tx)
         send_wallet_update(tx.wallet.user, True)
+        return HttpResponse("*ok*", content_type="text/plain")
 
-        settings = SiteSettings.get_settings()
 
-        # ---- Deposit Promo Bonus ----
-        if settings.enable_deposit_promo and credited_amount >= settings.deposit_promo_min_amount:
-            raw_bonus = credited_amount * settings.deposit_promo_percentage / Decimal("100")
-            bonus_amount = min(raw_bonus, settings.deposit_promo_max_bonus).quantize(Decimal("0.01"))
-            if bonus_amount > 0:
-                days = settings.deposit_promo_expiry_days
-                expires_at = (timezone.now() + timedelta(days=days)) if days else None
-                tx.wallet.credit_bonus(
-                    bonus_amount,
-                    expires_at=expires_at,
-                    source_transaction=tx,
-                    percentage=settings.deposit_promo_percentage,
-                )
-                send_wallet_update(tx.wallet.user, True)
+def _apply_deposit_rewards(wallet, credited_amount, credited_tx):
+    site_settings = SiteSettings.get_settings()
+    if site_settings.enable_deposit_promo and credited_amount >= site_settings.deposit_promo_min_amount:
+        raw_bonus = credited_amount * site_settings.deposit_promo_percentage / Decimal("100")
+        bonus_amount = min(raw_bonus, site_settings.deposit_promo_max_bonus).quantize(Decimal("0.01"))
+        if bonus_amount > 0:
+            days = site_settings.deposit_promo_expiry_days
+            expires_at = (timezone.now() + timedelta(days=days)) if days else None
+            wallet.credit_bonus(
+                bonus_amount,
+                expires_at=expires_at,
+                source_transaction=credited_tx,
+                percentage=site_settings.deposit_promo_percentage,
+            )
 
-        # Referral Reward Logic
-        user = tx.wallet.user
-        if settings.enable_referrals and user.referred_by:
-            # Mutual Reward Calculation: (deposit * percentage / 100)
-            bonus_amount = (credited_amount * settings.referral_percentage) / Decimal('100.00')
-            
-            if bonus_amount > 0:
-                # Credit Referrer
-                user.referred_by.wallet.credit_referral(bonus_amount)
-                send_wallet_update(user.referred_by, True)
+    user = wallet.user
+    if site_settings.enable_referrals and user.referred_by:
+        bonus_amount = (credited_amount * site_settings.referral_percentage) / Decimal("100.00")
+        if bonus_amount > 0:
+            user.referred_by.wallet.credit_referral(bonus_amount)
+            user.wallet.credit_referral(bonus_amount)
+            from api.models import Referral
 
-                # Credit Invitee (the depositor)
-                user.wallet.credit_referral(bonus_amount)
-                send_wallet_update(user, True)
-
-                # Log the referral (one-to-many now, as it's recurring)
-                from api.models import Referral
-                Referral.objects.create(
-                    referrer=user.referred_by,
-                    referred_user=user,
-                    is_rewarded=True,
-                    reward_amount=bonus_amount
-                )
-
-        return Response({"detail": "Wallet credited successfully."}, status=status.HTTP_200_OK)
-   
-    
+            Referral.objects.create(
+                referrer=user.referred_by,
+                referred_user=user,
+                is_rewarded=True,
+                reward_amount=bonus_amount,
+            )
