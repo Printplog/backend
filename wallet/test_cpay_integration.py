@@ -354,7 +354,6 @@ class CPayDepositRoutingTests(TestCase):
     CPAY_PAYOUT_WALLET_ID="treasury-wallet",
     CPAY_PAYOUT_WALLET_PASSPHRASE="treasury-passphrase",
     CPAY_LIVE_PAYOUTS_ENABLED=True,
-    CPAY_MAX_TRANCHES_PER_RUN=10,
 )
 class RevenueDistributionTaskTests(TestCase):
     def setUp(self):
@@ -377,7 +376,7 @@ class RevenueDistributionTaskTests(TestCase):
 
     @patch("wallet.tasks.execute_revenue_distribution.delay")
     @patch("wallet.tasks.CPayClient.get_available_usdt_balance", return_value=Decimal("250"))
-    def test_complete_threshold_tranches_are_split_exactly_once(self, _get_balance, queue_execution):
+    def test_full_available_balance_is_split_exactly_once(self, _get_balance, queue_execution):
         with self.captureOnCommitCallbacks(execute=True):
             result = check_revenue_distribution.run()
             duplicate = check_revenue_distribution.run()
@@ -385,12 +384,22 @@ class RevenueDistributionTaskTests(TestCase):
         self.assertTrue(result["created"])
         self.assertEqual(duplicate["reason"], "batch_in_progress")
         batch = RevenueDistributionBatch.objects.get()
-        self.assertEqual(batch.amount, Decimal("200.000000"))
+        self.assertEqual(batch.amount, Decimal("250.000000"))
         self.assertEqual(
             list(batch.payouts.values_list("amount", flat=True)),
-            [Decimal("120.000000"), Decimal("80.000000")],
+            [Decimal("150.000000"), Decimal("100.000000")],
         )
         queue_execution.assert_called_once_with(str(batch.id))
+
+    @patch("wallet.tasks.execute_revenue_distribution.delay")
+    @patch("wallet.tasks.CPayClient.get_available_usdt_balance", return_value=Decimal("99.999999"))
+    def test_balance_below_threshold_is_left_untouched(self, _get_balance, queue_execution):
+        result = check_revenue_distribution.run()
+
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "below_threshold")
+        self.assertFalse(RevenueDistributionBatch.objects.exists())
+        queue_execution.assert_not_called()
 
     @patch("wallet.tasks.reconcile_revenue_distributions.apply_async")
     @patch("wallet.tasks.CPayClient.withdraw_usdt", side_effect=["cpay-tx-1", "cpay-tx-2"])
