@@ -69,7 +69,11 @@ RUN chmod +x docker-entrypoint.sh
 RUN SECRET_KEY=build-time-only-9hF3qL7wB2mN6xC8vK4sT1pR5zY0dG9jU3aE7iO2cV6nM8qX \
     JWT_SIGNING_KEY=build-time-jwt-only-4pZ8vN2cQ7mL1xK6dR9sW3fH5jT0yB4uE8aG2iC6oV1nM7qS \
     API_KEY_PEPPER=build-time-api-only-7kD3rX9mQ2vL8sH5nT1cW6fB0yP4uE9aJ3iG7oN2zR5xK8dV \
+    ADMIN_2FA_ENCRYPTION_KEY=build-time-2fa-only-6vR2mK9xD4pL7sW1cH8nT5yB0qF3uJ6aE9iG2oN7zX4rC8dQ \
+    PAYMENT_ENCRYPTION_KEY=build-time-payment-only-8qT3nV7cK1mR5xD9sL2pH6yB4uF0aJ7iE3oG9zW5rC1dM8kX \
+    ENV=production \
     DEBUG=False \
+    SENTRY_DSN= \
     DATABASE_URL=sqlite:///:memory: \
     python manage.py collectstatic --noinput
 
