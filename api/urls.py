@@ -18,6 +18,7 @@ from .views.api_platform import (
     ApiKeyListCreateView,
     ApiKeyRevokeView,
 )
+from .views.admin_api import AdminApiCustomersView, AdminApiCustomerStatusView, AdminApiKeyRevokeView
 
 def health_check(request):
     return HttpResponse("OK")
@@ -50,6 +51,9 @@ urlpatterns = [
 
     # Admin views
     path("admin/overview/", AdminOverview.as_view(), name="admin-overview"),
+    path("admin/api-customers/", AdminApiCustomersView.as_view(), name="admin-api-customers"),
+    path("admin/api-customers/<int:user_id>/", AdminApiCustomerStatusView.as_view(), name="admin-api-customer-status"),
+    path("admin/api-customers/<int:user_id>/keys/<uuid:key_id>/", AdminApiKeyRevokeView.as_view(), name="admin-api-key-revoke"),
     path("admin/users/", AdminUsers.as_view(), name="admin-users"),
     path("admin/users/<int:user_id>/", AdminUserDetails.as_view(), name="admin-user-details"),
     path("admin/documents/", AdminDocuments.as_view(), name="admin-documents"),

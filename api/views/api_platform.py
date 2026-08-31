@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import time
 import uuid
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -39,6 +40,7 @@ from api.models import (
     ApiEntitlement,
     ApiIdempotencyRecord,
     ApiKey,
+    ApiUsageEvent,
     DocumentRenderJob,
     EmbedSession,
     PurchasedTemplate,
@@ -229,6 +231,38 @@ class V1ApiView(APIView):
     authentication_classes = [ApiKeyAuthentication]
     permission_classes = [IsAuthenticated]
     throttle_classes = [ApiKeyRateThrottle]
+
+    def dispatch(self, request, *args, **kwargs):
+        self._api_started_at = time.monotonic()
+        return super().dispatch(request, *args, **kwargs)
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        api_key = getattr(request, "api_key", None)
+        api_customer = getattr(request, "api_customer", None)
+        if api_key and api_customer:
+            try:
+                resolver_match = getattr(request, "resolver_match", None)
+                operation = getattr(resolver_match, "url_name", None) or self.__class__.__name__
+                external_user_id = request.query_params.get("external_user_id", "")
+                if not external_user_id and isinstance(getattr(request, "data", None), dict):
+                    external_user_id = request.data.get("external_user_id", "")
+                if not isinstance(external_user_id, str):
+                    external_user_id = ""
+                duration_ms = max(0, round((time.monotonic() - self._api_started_at) * 1000))
+                ApiUsageEvent.objects.create(
+                    user=api_customer,
+                    api_key=api_key,
+                    operation=str(operation)[:120],
+                    method=request.method[:8],
+                    status_code=response.status_code,
+                    external_user_id=external_user_id.strip()[:255],
+                    duration_ms=duration_ms,
+                )
+            except Exception:
+                # Telemetry must never make a customer API request fail.
+                pass
+        return response
 
 
 def _template_summary(template, request=None, discount_percentage=None):

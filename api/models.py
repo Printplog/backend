@@ -347,6 +347,37 @@ class ApiKey(models.Model):
         return f"{self.user.username} - {self.name} ({self.prefix})"
 
 
+class ApiUsageEvent(models.Model):
+    """Privacy-safe operational telemetry for authenticated public API calls."""
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_usage_events")
+    api_key = models.ForeignKey(
+        ApiKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="usage_events",
+    )
+    operation = models.CharField(max_length=120)
+    method = models.CharField(max_length=8)
+    status_code = models.PositiveSmallIntegerField()
+    external_user_id = models.CharField(max_length=255, blank=True, default="")
+    duration_ms = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "-created_at"], name="api_usage_user_created_idx"),
+            models.Index(fields=["api_key", "-created_at"], name="api_usage_key_created_idx"),
+            models.Index(fields=["status_code", "-created_at"], name="api_usage_status_created_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} {self.method} {self.operation} ({self.status_code})"
+
+
 class EmbedSession(models.Model):
     class Operation(models.TextChoices):
         CREATE = "create", "Create"

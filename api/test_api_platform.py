@@ -17,6 +17,7 @@ from api.api_security import DEFAULT_API_KEY_SCOPES, generate_api_key
 from api.models import (
     ApiEntitlement,
     ApiKey,
+    ApiUsageEvent,
     DocumentRenderJob,
     EmbedSession,
     PurchasedTemplate,
@@ -168,6 +169,71 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         listed = next(item for item in response.data["results"] if str(item["id"]) == str(self.template.id))
         self.assertIsNone(listed["banner_url"])
+
+    def test_authenticated_api_calls_create_privacy_safe_usage_events(self):
+        token, key = self.issue_key()
+        self.api_credentials(token)
+
+        response = self.client.get("/api/v1/templates")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        event = ApiUsageEvent.objects.get(api_key=key)
+        self.assertEqual(event.user, self.customer)
+        self.assertEqual(event.operation, "v1-template-list")
+        self.assertEqual(event.method, "GET")
+        self.assertEqual(event.status_code, 200)
+        self.assertGreaterEqual(event.duration_ms, 0)
+
+    def test_admin_api_customer_dashboard_attributes_external_users_and_activity(self):
+        token, key = self.issue_key()
+        self.create_embed_session(token, external_user_id="partner-user-42")
+        PurchasedTemplate.objects.create(
+            buyer=self.customer,
+            template=self.template,
+            external_user_id="partner-user-42",
+            name="Partner document",
+            test=True,
+        )
+        admin = User.objects.create_superuser("admin-api", "admin-api@example.com", "password")
+        self.client.credentials()
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.get("/api/admin/api-customers/?days=30")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["summary"]["customers"], 1)
+        self.assertEqual(response.data["summary"]["external_users"], 1)
+        customer = response.data["customers"]["results"][0]
+        self.assertEqual(customer["user"]["id"], self.customer.id)
+        self.assertEqual(customer["external_users"], 1)
+        self.assertEqual(customer["sessions"], 1)
+        self.assertEqual(customer["documents"], 1)
+        self.assertEqual(customer["requests"], 1)
+        self.assertEqual(customer["keys"][0]["prefix"], key.prefix)
+
+        status_response = self.client.patch(
+            f"/api/admin/api-customers/{self.customer.id}/",
+            {"status": ApiEntitlement.Status.SUSPENDED},
+            format="json",
+        )
+        self.assertEqual(status_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_response.data["status"], ApiEntitlement.Status.SUSPENDED)
+        self.assertEqual(
+            EmbedSession.objects.get(user=self.customer).status,
+            EmbedSession.Status.REVOKED,
+        )
+
+        revoke_response = self.client.delete(
+            f"/api/admin/api-customers/{self.customer.id}/keys/{key.id}/"
+        )
+        self.assertEqual(revoke_response.status_code, status.HTTP_204_NO_CONTENT)
+        key.refresh_from_db()
+        self.assertIsNotNone(key.revoked_at)
+
+    def test_api_customer_dashboard_requires_superuser(self):
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.get("/api/admin/api-customers/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_api_tool_discount_is_listed_and_charged_for_paid_embed(self):
         self.site.api_tool_discount_percentage = Decimal("20.00")
