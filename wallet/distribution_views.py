@@ -1,5 +1,5 @@
 import uuid
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -275,6 +275,16 @@ class DistributionRetryView(APIView):
         if not settings.CPAY_LIVE_PAYOUTS_ENABLED:
             return Response({"detail": "Live CPay payouts are locked by the server environment."}, status=status.HTTP_409_CONFLICT)
 
+        try:
+            available_balance = CPayClient().get_available_usdt_balance()
+        except PaymentProviderError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        whole_balance = available_balance.quantize(Decimal("1"), rounding=ROUND_DOWN).quantize(
+            Decimal("0.000001")
+        )
+        if whole_balance <= 0:
+            return Response({"detail": "No whole USDT is available to retry."}, status=status.HTTP_409_CONFLICT)
+
         with transaction.atomic():
             try:
                 batch = RevenueDistributionBatch.objects.select_for_update().get(
@@ -283,10 +293,36 @@ class DistributionRetryView(APIView):
                 )
             except RevenueDistributionBatch.DoesNotExist:
                 return Response({"detail": "Failed distribution batch not found."}, status=status.HTTP_404_NOT_FOUND)
-            for payout in batch.payouts.filter(status=RevenueDistributionPayout.Status.FAILED):
-                if payout.provider_transaction_id:
-                    payout.provider_transaction_id = ""
-                    payout.idempotency_key = f"sharptoolz-revenue-{payout.id}-retry-{uuid.uuid4()}"
+            payouts = list(batch.payouts.select_for_update().order_by("created_at"))
+            has_submitted_transfer = any(
+                payout.provider_transaction_id
+                or payout.status in {
+                    RevenueDistributionPayout.Status.SUBMITTED,
+                    RevenueDistributionPayout.Status.COMPLETED,
+                }
+                for payout in payouts
+            )
+            if not has_submitted_transfer:
+                batch.amount = whole_balance
+                batch.balance_before = available_balance
+                allocated = Decimal("0")
+                for index, payout in enumerate(payouts):
+                    if index == len(payouts) - 1:
+                        payout.amount = whole_balance - allocated
+                    else:
+                        payout.amount = (
+                            whole_balance * payout.percentage / Decimal("100")
+                        ).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
+                        allocated += payout.amount
+                    payout.save(update_fields=["amount", "updated_at"])
+
+            for payout in payouts:
+                if payout.status != RevenueDistributionPayout.Status.FAILED:
+                    continue
+                # CPay can replay a rejected validation response for an
+                # idempotency key even when no provider transaction exists.
+                payout.provider_transaction_id = ""
+                payout.idempotency_key = f"sharptoolz-revenue-{payout.id}-retry-{uuid.uuid4()}"
                 payout.status = RevenueDistributionPayout.Status.PENDING
                 payout.error_message = ""
                 payout.save(update_fields=[
@@ -294,7 +330,9 @@ class DistributionRetryView(APIView):
                 ])
             batch.status = RevenueDistributionBatch.Status.PREPARING
             batch.error_message = ""
-            batch.save(update_fields=["status", "error_message", "updated_at"])
+            batch.save(update_fields=[
+                "amount", "balance_before", "status", "error_message", "updated_at",
+            ])
             transaction.on_commit(lambda: execute_revenue_distribution.delay(str(batch.id)))
 
         return Response({"detail": "Failed transfers queued for retry."}, status=status.HTTP_202_ACCEPTED)

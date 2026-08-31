@@ -71,7 +71,7 @@ ACTIVE_BATCH_STATUSES = (
     max_retries=3,
 )
 def check_revenue_distribution(self, force=False):
-    """Create one locked distribution batch for all complete threshold tranches."""
+    """Create one locked batch for the whole-dollar available balance."""
     close_old_connections()
     try:
         current_config = RevenueDistributionConfig.get_config()
@@ -102,10 +102,11 @@ def check_revenue_distribution(self, force=False):
                 return {"created": False, "reason": "allocation_not_100", "balance": str(balance)}
 
             threshold = config.threshold_amount
-            tranche_count = min(int(balance // threshold), settings.CPAY_MAX_TRANCHES_PER_RUN)
-            if tranche_count < 1:
+            if balance < threshold:
                 return {"created": False, "reason": "below_threshold", "balance": str(balance)}
-            amount = (threshold * tranche_count).quantize(Decimal("0.000001"))
+            # Once the threshold is reached, distribute the real available
+            # balance while leaving only its fractional USDT remainder.
+            amount = balance.quantize(Decimal("1"), rounding=ROUND_DOWN).quantize(Decimal("0.000001"))
             batch = RevenueDistributionBatch.objects.create(
                 amount=amount,
                 threshold_amount=threshold,

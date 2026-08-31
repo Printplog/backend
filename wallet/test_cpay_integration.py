@@ -376,8 +376,8 @@ class RevenueDistributionTaskTests(TestCase):
         )
 
     @patch("wallet.tasks.execute_revenue_distribution.delay")
-    @patch("wallet.tasks.CPayClient.get_available_usdt_balance", return_value=Decimal("250"))
-    def test_complete_threshold_tranches_are_split_exactly_once(self, _get_balance, queue_execution):
+    @patch("wallet.tasks.CPayClient.get_available_usdt_balance", return_value=Decimal("250.987654"))
+    def test_whole_available_balance_is_split_exactly_once(self, _get_balance, queue_execution):
         with self.captureOnCommitCallbacks(execute=True):
             result = check_revenue_distribution.run()
             duplicate = check_revenue_distribution.run()
@@ -385,10 +385,10 @@ class RevenueDistributionTaskTests(TestCase):
         self.assertTrue(result["created"])
         self.assertEqual(duplicate["reason"], "batch_in_progress")
         batch = RevenueDistributionBatch.objects.get()
-        self.assertEqual(batch.amount, Decimal("200.000000"))
+        self.assertEqual(batch.amount, Decimal("250.000000"))
         self.assertEqual(
             list(batch.payouts.values_list("amount", flat=True)),
-            [Decimal("120.000000"), Decimal("80.000000")],
+            [Decimal("150.000000"), Decimal("100.000000")],
         )
         queue_execution.assert_called_once_with(str(batch.id))
 
@@ -424,6 +424,17 @@ class RevenueDistributionTaskTests(TestCase):
             self.assertTrue(call.kwargs["idempotency_key"].startswith("test-"))
         queue_reconcile.assert_called()
 
+    @patch.object(CPayClient, "_authenticate", return_value="wallet-token")
+    @patch.object(CPayClient, "_request", return_value={"data": {"id": "cpay-tx-1"}})
+    def test_withdrawal_amount_is_sent_as_a_decimal_string(self, request, _authenticate):
+        CPayClient().withdraw_usdt(
+            to=CPAY_ADDRESS,
+            amount=Decimal("3.00"),
+            idempotency_key="manual-test",
+        )
+
+        self.assertEqual(request.call_args.kwargs["json"]["amount"], "3.00")
+
 
 class RevenueDistributionAdminValidationTests(TestCase):
     def setUp(self):
@@ -455,3 +466,44 @@ class RevenueDistributionAdminValidationTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("100%", response.data["detail"])
+
+    @override_settings(CPAY_LIVE_PAYOUTS_ENABLED=True)
+    @patch("wallet.distribution_views.CPayClient.get_available_usdt_balance", return_value=Decimal("124.87"))
+    @patch("wallet.distribution_views._require_totp", return_value=None)
+    @patch("wallet.distribution_views.execute_revenue_distribution.delay")
+    def test_retry_resizes_unsubmitted_batch_and_rotates_idempotency_key(
+        self, queue_execution, _require_totp, _get_balance,
+    ):
+        batch = RevenueDistributionBatch.objects.create(
+            amount=Decimal("100"),
+            threshold_amount=Decimal("100"),
+            balance_before=Decimal("122"),
+            status=RevenueDistributionBatch.Status.FAILED,
+        )
+        payout = RevenueDistributionPayout.objects.create(
+            batch=batch,
+            recipient_name="First",
+            recipient_email="first@example.com",
+            bep20_address=CPAY_ADDRESS,
+            percentage=Decimal("100"),
+            amount=Decimal("100"),
+            idempotency_key="rejected-request-key",
+            status=RevenueDistributionPayout.Status.FAILED,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                f"/api/admin/cpay-distribution/batches/{batch.id}/retry/",
+                {"two_factor_code": "123456"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        batch.refresh_from_db()
+        payout.refresh_from_db()
+        self.assertEqual(batch.amount, Decimal("124.000000"))
+        self.assertEqual(batch.balance_before, Decimal("124.870000"))
+        self.assertEqual(payout.amount, Decimal("124.000000"))
+        self.assertEqual(payout.status, RevenueDistributionPayout.Status.PENDING)
+        self.assertNotEqual(payout.idempotency_key, "rejected-request-key")
+        queue_execution.assert_called_once_with(str(batch.id))

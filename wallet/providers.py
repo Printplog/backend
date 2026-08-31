@@ -232,7 +232,9 @@ class CPayClient:
         token = self._authenticate(wallet=True)
         body = {
             "to": to,
-            "amount": float(amount),
+            # CPay's live API validates monetary amounts as decimal strings.
+            # Sending a JSON number is rejected before a transaction is created.
+            "amount": format(amount, "f"),
             "currencyToken": settings.CPAY_BEP20_USDT_CURRENCY_ID,
         }
         if settings.CPAY_PAYOUT_WALLET_PASSWORD:
