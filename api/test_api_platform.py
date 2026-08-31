@@ -195,6 +195,7 @@ class ApiPlatformSecurityTests(APITestCase):
             test=True,
         )
         admin = User.objects.create_superuser("admin-api", "admin-api@example.com", "password")
+        ApiEntitlement.objects.create(user=admin)
         self.client.credentials()
         self.client.force_authenticate(user=admin)
 
@@ -210,6 +211,21 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertEqual(customer["documents"], 1)
         self.assertEqual(customer["requests"], 1)
         self.assertEqual(customer["keys"][0]["prefix"], key.prefix)
+
+        details_response = self.client.get(
+            f"/api/admin/api-customers/{self.customer.id}/?days=30"
+        )
+        self.assertEqual(details_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(details_response.data["customer"]["external_users"], 1)
+        self.assertEqual(
+            details_response.data["external_users"][0]["external_user_id"],
+            "partner-user-42",
+        )
+        self.assertEqual(details_response.data["external_users"][0]["requests"], 1)
+        self.assertEqual(len(details_response.data["recent_activity"]), 1)
+
+        internal_details = self.client.get(f"/api/admin/api-customers/{admin.id}/")
+        self.assertEqual(internal_details.status_code, status.HTTP_404_NOT_FOUND)
 
         status_response = self.client.patch(
             f"/api/admin/api-customers/{self.customer.id}/",
