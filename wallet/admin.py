@@ -31,9 +31,12 @@ class CPayDepositRouteAdmin(admin.ModelAdmin):
 
 @admin.register(CryptAPIWebhookEvent)
 class CryptAPIWebhookEventAdmin(admin.ModelAdmin):
-    list_display = ('callback_id', 'route', 'amount_forwarded', 'created_at')
+    list_display = ('callback_id', 'route', 'amount_received', 'amount_forwarded', 'cost_absorbed', 'created_at')
     search_fields = ('callback_id', 'txid_in', 'txid_out', 'route__cpay_address')
-    readonly_fields = ('route', 'callback_id', 'txid_in', 'txid_out', 'amount_forwarded', 'credited_transaction')
+    readonly_fields = (
+        'route', 'callback_id', 'txid_in', 'txid_out', 'amount_received',
+        'amount_forwarded', 'cost_absorbed', 'credited_transaction',
+    )
 
 
 @admin.register(CPayWebhookEvent)

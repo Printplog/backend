@@ -13,6 +13,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from api.models import SiteSettings
 from wallet.models import (
     CPayDepositRoute,
     CPayWebhookEvent,
@@ -236,7 +237,7 @@ class CPayDepositRoutingTests(TestCase):
     @patch("wallet.views.CryptAPIWebhookView._queue_distribution_check")
     @patch("wallet.views.send_wallet_update")
     @patch("wallet.views.verify_cryptapi_signature", return_value=True)
-    def test_signed_callback_credits_exact_amount_once(
+    def test_signed_callback_credits_gross_amount_and_absorbs_fees_once(
         self,
         _verify_signature,
         _send_wallet_update,
@@ -260,13 +261,20 @@ class CPayDepositRoutingTests(TestCase):
             cryptapi_callback_url="https://example.test/callback",
             cryptapi_address_in=SECOND_ADDRESS,
         )
+        site_settings = SiteSettings.get_settings()
+        site_settings.enable_deposit_promo = True
+        site_settings.deposit_promo_min_amount = Decimal("30.00")
+        site_settings.deposit_promo_percentage = Decimal("100.00")
+        site_settings.deposit_promo_max_bonus = Decimal("100.00")
+        site_settings.save()
         payload = {
             "uuid": "cryptapi-callback-1",
             "address_in": SECOND_ADDRESS,
             "address_out": CPAY_ADDRESS,
             "txid_in": "incoming-chain-transaction",
             "txid_out": "forwarding-chain-transaction",
-            "value_forwarded_coin": "6.909999",
+            "value_coin": "30.000000",
+            "value_forwarded_coin": "29.650000",
             "coin": "bep20_usdt",
             "pending": 0,
             "confirmations": 1,
@@ -294,9 +302,14 @@ class CPayDepositRoutingTests(TestCase):
         self.user.wallet.refresh_from_db()
         tx.refresh_from_db()
         route.refresh_from_db()
-        self.assertEqual(self.user.wallet.balance, Decimal("6.90"))
-        self.assertEqual(tx.amount, Decimal("6.90"))
-        self.assertEqual(route.forwarded_amount, Decimal("6.900000"))
+        event = CryptAPIWebhookEvent.objects.get()
+        self.assertEqual(self.user.wallet.balance, Decimal("30.00"))
+        self.assertEqual(self.user.wallet.bonus_balance, Decimal("30.00"))
+        self.assertEqual(tx.amount, Decimal("30.00"))
+        self.assertEqual(route.forwarded_amount, Decimal("29.650000"))
+        self.assertEqual(event.amount_received, Decimal("30.000000"))
+        self.assertEqual(event.amount_forwarded, Decimal("29.650000"))
+        self.assertEqual(event.cost_absorbed, Decimal("0.350000"))
         self.assertEqual(CryptAPIWebhookEvent.objects.count(), 1)
         _queue_distribution.assert_called_once()
 

@@ -45,11 +45,20 @@ class WalletStatsView(APIView):
             type=Transaction.Type.DEPOSIT
         ).aggregate(total=Count('wallet_id', distinct=True))['total'] or 0
 
+        all_time_earned = Transaction.objects.filter(
+            type=Transaction.Type.PAYMENT,
+            status=Transaction.Status.COMPLETED,
+            wallet__user__is_staff=False,
+            wallet__user__is_superuser=False,
+        ).exclude(
+            description__startswith="Admin adjustment:"
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
         response = Response({
             'totalBalance': float(total_balance),
             'totalInflow': float(total_inflow),
             'totalOutflow': abs(float(total_outflow)),
-            'netFlow': float(total_inflow), # Per user request: inflow is platform revenue
+            'allTimeEarned': abs(float(all_time_earned)),
             'transactionCount': transaction_count,
             'fundedWallets': funded_wallets,
             'rangeDays': days,

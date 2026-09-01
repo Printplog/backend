@@ -384,6 +384,7 @@ class CryptAPIWebhookView(APIView):
             address_out,
             txid_in,
             txid_out,
+            payload.get("value_coin"),
             payload.get("value_forwarded_coin"),
         ]):
             return Response({"detail": "Missing required callback fields."}, status=status.HTTP_400_BAD_REQUEST)
@@ -393,13 +394,22 @@ class CryptAPIWebhookView(APIView):
             return Response({"detail": "Payment route does not match."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            credited_amount = Decimal(str(payload["value_forwarded_coin"])).quantize(
-                Decimal("0.01"), rounding=ROUND_DOWN
+            amount_received = Decimal(str(payload["value_coin"])).quantize(
+                Decimal("0.000001"), rounding=ROUND_DOWN
+            )
+            amount_forwarded = Decimal(str(payload["value_forwarded_coin"])).quantize(
+                Decimal("0.000001"), rounding=ROUND_DOWN
             )
         except (InvalidOperation, TypeError, ValueError):
             return Response({"detail": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
-        if credited_amount <= 0:
-            return Response({"detail": "Forwarded amount is too small to credit."}, status=status.HTTP_400_BAD_REQUEST)
+        if not amount_received.is_finite() or not amount_forwarded.is_finite():
+            return Response({"detail": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
+        credited_amount = amount_received.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        if credited_amount <= 0 or amount_forwarded <= 0:
+            return Response({"detail": "Payment amount is too small to credit."}, status=status.HTTP_400_BAD_REQUEST)
+        if amount_forwarded > amount_received:
+            return Response({"detail": "Forwarded amount exceeds received amount."}, status=status.HTTP_400_BAD_REQUEST)
+        cost_absorbed = amount_received - amount_forwarded
 
         try:
             credited_tx, wallet = self._credit_route(
@@ -407,7 +417,10 @@ class CryptAPIWebhookView(APIView):
                 callback_id=callback_id,
                 txid_in=txid_in,
                 txid_out=txid_out,
-                amount=credited_amount,
+                credited_amount=credited_amount,
+                amount_received=amount_received,
+                amount_forwarded=amount_forwarded,
+                cost_absorbed=cost_absorbed,
             )
         except IntegrityError:
             return HttpResponse("*ok*", content_type="text/plain")
@@ -419,7 +432,17 @@ class CryptAPIWebhookView(APIView):
 
     @staticmethod
     @transaction.atomic
-    def _credit_route(*, route_id, callback_id, txid_in, txid_out, amount):
+    def _credit_route(
+        *,
+        route_id,
+        callback_id,
+        txid_in,
+        txid_out,
+        credited_amount,
+        amount_received,
+        amount_forwarded,
+        cost_absorbed,
+    ):
         if CryptAPIWebhookEvent.objects.filter(callback_id=callback_id).exists():
             return None, None
 
@@ -431,38 +454,40 @@ class CryptAPIWebhookView(APIView):
             credited_tx = route.transaction
             credited_tx.status = Transaction.Status.COMPLETED
             credited_tx.tx_hash = txid_in
-            credited_tx.amount = amount
+            credited_tx.amount = credited_amount
             credited_tx.save(update_fields=["status", "tx_hash", "amount"])
         else:
             credited_tx = Transaction.objects.create(
                 wallet=wallet,
                 type=Transaction.Type.DEPOSIT,
                 status=Transaction.Status.COMPLETED,
-                amount=amount,
+                amount=credited_amount,
                 tx_hash=txid_in,
                 address=route.cryptapi_address_in,
                 description="Additional wallet funding",
             )
 
-        wallet.credit(amount, create_transaction=False)
+        wallet.credit(credited_amount, create_transaction=False)
         CryptAPIWebhookEvent.objects.create(
             route=route,
             callback_id=callback_id,
             txid_in=txid_in,
             txid_out=txid_out,
-            amount_forwarded=amount,
+            amount_received=amount_received,
+            amount_forwarded=amount_forwarded,
+            cost_absorbed=cost_absorbed,
             credited_transaction=credited_tx,
         )
         route.cryptapi_callback_id = callback_id
         route.cryptapi_txid_in = txid_in
         route.cryptapi_txid_out = txid_out
-        route.forwarded_amount = route.forwarded_amount + amount
+        route.forwarded_amount = route.forwarded_amount + amount_forwarded
         route.status = CPayDepositRoute.Status.FORWARDED
         route.save(update_fields=[
             "cryptapi_callback_id", "cryptapi_txid_in", "cryptapi_txid_out",
             "forwarded_amount", "status", "updated_at",
         ])
-        _apply_deposit_rewards(wallet, amount, credited_tx)
+        _apply_deposit_rewards(wallet, credited_amount, credited_tx)
         return credited_tx, wallet
 
     @staticmethod
@@ -488,13 +513,15 @@ class CryptAPIWebhookView(APIView):
         if pending != 0 or confirmations < required:
             return HttpResponse("*ok*", content_type="text/plain")
         try:
-            amount = Decimal(str(payload.get("value_forwarded_coin"))).quantize(
+            amount = Decimal(str(payload.get("value_coin"))).quantize(
                 Decimal("0.01"), rounding=ROUND_DOWN
             )
         except (InvalidOperation, TypeError, ValueError):
             return Response({"detail": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
+        if not amount.is_finite():
+            return Response({"detail": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
         if amount <= 0:
-            return Response({"detail": "Forwarded amount is too small to credit."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Payment amount is too small to credit."}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
             try:

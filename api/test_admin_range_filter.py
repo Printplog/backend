@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from api.views.admin import AdminUsers
-from api.views.wallet import TransactionHistoryView
+from api.views.wallet import TransactionHistoryView, WalletStatsView
 from wallet.models import Transaction, Wallet
 
 User = get_user_model()
@@ -106,3 +106,41 @@ class TransactionRangeFilterTests(TestCase):
         self.assertEqual(self.tx_count("?days=7"), 2)
         self.assertEqual(self.tx_count("?days=30"), 3)
         self.assertEqual(self.tx_count("?days=365"), 4)
+
+
+class WalletStatsTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.admin = User.objects.create_superuser(
+            username="stats-admin", email="stats-admin@example.com", password="pw"
+        )
+        self.customer = User.objects.create_user(
+            username="stats-customer", email="stats-customer@example.com", password="pw"
+        )
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.customer)
+
+    def create_payment(self, amount, description, age_days=0):
+        payment = Transaction.objects.create(
+            wallet=self.wallet,
+            amount=-Decimal(amount),
+            type=Transaction.Type.PAYMENT,
+            status=Transaction.Status.COMPLETED,
+            description=description,
+        )
+        Transaction.objects.filter(pk=payment.pk).update(
+            created_at=timezone.now() - timedelta(days=age_days)
+        )
+
+    def test_all_time_earned_is_not_limited_by_selected_range(self):
+        self.create_payment("12.00", "Tool purchase: Logo", age_days=0)
+        self.create_payment("38.00", "Watermark removal: Certificate", age_days=200)
+        self.create_payment("9.00", "Admin adjustment: correction", age_days=0)
+
+        request = self.factory.get("/api/admin/wallet/stats/?days=1")
+        force_authenticate(request, user=self.admin)
+        response = WalletStatsView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["totalOutflow"], 21.0)
+        self.assertEqual(response.data["allTimeEarned"], 50.0)
+        self.assertNotIn("netFlow", response.data)

@@ -258,7 +258,9 @@ class CryptAPIWebhookEvent(models.Model):
     callback_id = models.CharField(max_length=128, unique=True)
     txid_in = models.CharField(max_length=255, unique=True)
     txid_out = models.CharField(max_length=255, blank=True)
+    amount_received = models.DecimalField(max_digits=18, decimal_places=6)
     amount_forwarded = models.DecimalField(max_digits=18, decimal_places=6)
+    cost_absorbed = models.DecimalField(max_digits=18, decimal_places=6)
     credited_transaction = models.OneToOneField(
         Transaction,
         on_delete=models.PROTECT,
@@ -270,7 +272,7 @@ class CryptAPIWebhookEvent(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.callback_id}: {self.amount_forwarded}"
+        return f"{self.callback_id}: {self.amount_received} received"
 
 
 class CPayWebhookEvent(models.Model):
