@@ -131,10 +131,25 @@ class WalletStatsTests(TestCase):
             created_at=timezone.now() - timedelta(days=age_days)
         )
 
+    def create_deposit(self, amount, description, age_days=0):
+        deposit = Transaction.objects.create(
+            wallet=self.wallet,
+            amount=Decimal(amount),
+            type=Transaction.Type.DEPOSIT,
+            status=Transaction.Status.COMPLETED,
+            description=description,
+        )
+        Transaction.objects.filter(pk=deposit.pk).update(
+            created_at=timezone.now() - timedelta(days=age_days)
+        )
+
     def test_all_time_earned_is_not_limited_by_selected_range(self):
         self.create_payment("12.00", "Tool purchase: Logo", age_days=0)
         self.create_payment("38.00", "Watermark removal: Certificate", age_days=200)
         self.create_payment("9.00", "Admin adjustment: correction", age_days=0)
+        self.create_deposit("20.00", "Wallet Funding", age_days=0)
+        self.create_deposit("80.00", "Wallet Funding", age_days=200)
+        self.create_deposit("5.00", "Admin adjustment: correction", age_days=0)
 
         request = self.factory.get("/api/admin/wallet/stats/?days=1")
         force_authenticate(request, user=self.admin)
@@ -142,5 +157,6 @@ class WalletStatsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["totalOutflow"], 21.0)
-        self.assertEqual(response.data["allTimeEarned"], 50.0)
+        self.assertEqual(response.data["allTimeEarned"], 100.0)
+        self.assertEqual(response.data["allTimePurchases"], 50.0)
         self.assertNotIn("netFlow", response.data)
