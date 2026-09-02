@@ -51,6 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
     libasound2 \
+    procps \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -70,10 +71,13 @@ RUN groupadd --gid 10001 appuser \
     && chown -R appuser:appuser /app/media /app/temp_uploads
 USER appuser
 
-# Worker health = can it reach the broker and respond to ping?
-# Node name MUST match the -n below (worker@%h) — pinging celery@ never replies.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD celery -A serverConfig inspect ping -d worker@$HOSTNAME || exit 1
+# A Celery inspect command has to boot Django and wait for a broker round trip.
+# Under load that regularly exceeds Docker's health timeout, leaving Swarm
+# rollouts stuck and replacing otherwise-running workers. Broker disconnects
+# already make the foreground Celery process exit and are handled by the
+# service restart policy, so liveness should only verify that process here.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD pgrep -f "[c]elery.*worker" >/dev/null || exit 1
 
 CMD celery -A serverConfig worker \
     --loglevel="$CELERY_LOGLEVEL" \

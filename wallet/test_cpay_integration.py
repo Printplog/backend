@@ -87,6 +87,47 @@ class CPayProviderResponseTests(SimpleTestCase):
 
         self.assertEqual(CPayClient().get_available_usdt_balance(), Decimal("105.25"))
 
+    @patch.object(CPayClient, "_authenticate", return_value="wallet-token")
+    @patch.object(CPayClient, "_request")
+    def test_transaction_lookup_falls_back_when_cpay_search_misses_withdrawal(
+        self,
+        request,
+        _authenticate,
+    ):
+        completed = {
+            "_id": "cpay-withdrawal-1",
+            "type": "Withdrawal",
+            "systemStatus": "Done",
+            "status": True,
+        }
+        request.side_effect = [
+            {"data": {"entities": []}},
+            {"data": {"entities": [completed]}},
+        ]
+
+        result = CPayClient().find_transaction("cpay-withdrawal-1")
+
+        self.assertEqual(result, completed)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(
+            request.call_args_list[1].kwargs["params"],
+            {"page": 1, "limit": 50, "order": "DESC"},
+        )
+
+    @patch.object(CPayClient, "_authenticate", return_value="wallet-token")
+    @patch.object(CPayClient, "_request")
+    def test_transaction_lookup_does_not_accept_a_different_recent_transaction(
+        self,
+        request,
+        _authenticate,
+    ):
+        request.side_effect = [
+            {"data": {"entities": []}},
+            {"data": {"entities": [{"_id": "another-transaction"}]}},
+        ]
+
+        self.assertIsNone(CPayClient().find_transaction("cpay-withdrawal-1"))
+
 
 @override_settings(
     CPAY_DEPOSIT_ROUTING_ENABLED=True,

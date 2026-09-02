@@ -272,7 +272,27 @@ class CPayClient:
             token=token,
             params={"search": transaction_id, "page": 1, "limit": 10, "order": "DESC"},
         )
+        target_id = str(transaction_id)
         for entity in (payload.get("data") or {}).get("entities") or []:
-            if str(entity.get("_id") or entity.get("id")) == str(transaction_id):
+            if str(entity.get("_id") or entity.get("id") or "") == target_id:
                 return entity
+
+        # CPay currently returns no entities when its `search` parameter is an
+        # exact Withdrawal ID, even though the same transaction is present in
+        # the unfiltered list. Reconciliation must still compare exact IDs; it
+        # must never infer a match from the result ordering alone.
+        page_size = 50
+        for page in range(1, 6):
+            fallback = self._request(
+                "GET",
+                "/api/public/transaction/list",
+                token=token,
+                params={"page": page, "limit": page_size, "order": "DESC"},
+            )
+            entities = (fallback.get("data") or {}).get("entities") or []
+            for entity in entities:
+                if str(entity.get("_id") or entity.get("id") or "") == target_id:
+                    return entity
+            if len(entities) < page_size:
+                break
         return None
