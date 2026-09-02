@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import timedelta
 from decimal import Decimal, ROUND_DOWN
 
 from celery import shared_task
@@ -60,6 +61,36 @@ ACTIVE_BATCH_STATUSES = (
     RevenueDistributionBatch.Status.FAILED,
 )
 
+STALE_DISTRIBUTION_AFTER = timedelta(minutes=5)
+
+
+def _requeue_stale_distribution_batch():
+    """Resume a batch whose execution handoff or worker was lost."""
+    stale_before = timezone.now() - STALE_DISTRIBUTION_AFTER
+    with transaction.atomic():
+        batch = (
+            RevenueDistributionBatch.objects.select_for_update()
+            .filter(
+                status__in=(
+                    RevenueDistributionBatch.Status.PREPARING,
+                    RevenueDistributionBatch.Status.SENDING,
+                ),
+                updated_at__lte=stale_before,
+            )
+            .order_by("created_at")
+            .first()
+        )
+        if not batch:
+            return None
+
+        batch.status = RevenueDistributionBatch.Status.PREPARING
+        batch.error_message = ""
+        batch.save(update_fields=["status", "error_message", "updated_at"])
+        batch_id = str(batch.id)
+        transaction.on_commit(lambda: execute_revenue_distribution.delay(batch_id))
+
+    return {"created": False, "reason": "stale_batch_requeued", "batch_id": batch_id}
+
 
 @shared_task(
     bind=True,
@@ -79,6 +110,11 @@ def check_revenue_distribution(self, force=False):
             return {"created": False, "reason": "disabled"}
         if not CPayClient.payout_configured():
             return {"created": False, "reason": "payout_provider_not_configured"}
+
+        recovery = _requeue_stale_distribution_batch()
+        if recovery:
+            return recovery
+
         provider = CPayClient()
         balance = provider.get_available_usdt_balance()
 
@@ -150,6 +186,10 @@ def execute_revenue_distribution(self, batch_id: str):
             batch = RevenueDistributionBatch.objects.select_for_update().get(pk=batch_id)
             if batch.status == RevenueDistributionBatch.Status.COMPLETED:
                 return {"status": "completed"}
+            if batch.status == RevenueDistributionBatch.Status.SUBMITTED:
+                return {"status": "submitted"}
+            if batch.status == RevenueDistributionBatch.Status.SENDING:
+                return {"status": "already_sending"}
             batch.status = RevenueDistributionBatch.Status.SENDING
             batch.error_message = ""
             batch.save(update_fields=["status", "error_message", "updated_at"])

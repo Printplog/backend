@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import time
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -10,6 +11,7 @@ import jwt
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -446,6 +448,29 @@ class RevenueDistributionTaskTests(TestCase):
         )
         queue_execution.assert_called_once_with(str(batch.id))
 
+    @patch("wallet.tasks.execute_revenue_distribution.delay")
+    @patch("wallet.tasks.CPayClient.get_available_usdt_balance")
+    def test_stale_preparing_batch_is_requeued_without_creating_another_batch(
+        self, get_balance, queue_execution,
+    ):
+        batch = RevenueDistributionBatch.objects.create(
+            amount=Decimal("100"),
+            threshold_amount=Decimal("100"),
+            balance_before=Decimal("100"),
+        )
+        RevenueDistributionBatch.objects.filter(pk=batch.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=6)
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            result = check_revenue_distribution.run()
+
+        self.assertEqual(result["reason"], "stale_batch_requeued")
+        self.assertEqual(result["batch_id"], str(batch.id))
+        self.assertEqual(RevenueDistributionBatch.objects.count(), 1)
+        get_balance.assert_not_called()
+        queue_execution.assert_called_once_with(str(batch.id))
+
     @patch("wallet.tasks.reconcile_revenue_distributions.apply_async")
     @patch("wallet.tasks.CPayClient.withdraw_usdt", side_effect=["cpay-tx-1", "cpay-tx-2"])
     def test_submissions_use_one_idempotent_transfer_per_recipient(self, withdraw, queue_reconcile):
@@ -477,6 +502,20 @@ class RevenueDistributionTaskTests(TestCase):
         for call in withdraw.call_args_list:
             self.assertTrue(call.kwargs["idempotency_key"].startswith("test-"))
         queue_reconcile.assert_called()
+
+    @patch("wallet.tasks.CPayClient.withdraw_usdt")
+    def test_duplicate_execution_does_not_race_a_sending_batch(self, withdraw):
+        batch = RevenueDistributionBatch.objects.create(
+            amount=Decimal("100"),
+            threshold_amount=Decimal("100"),
+            balance_before=Decimal("100"),
+            status=RevenueDistributionBatch.Status.SENDING,
+        )
+
+        result = execute_revenue_distribution.run(str(batch.id))
+
+        self.assertEqual(result["status"], "already_sending")
+        withdraw.assert_not_called()
 
     @patch.object(CPayClient, "_authenticate", return_value="wallet-token")
     @patch.object(CPayClient, "_request", return_value={"data": {"id": "cpay-tx-1"}})
