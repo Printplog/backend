@@ -67,6 +67,9 @@ def render_document(self, job_id: str) -> None:
     except Exception as exc:
         error_code = "render_timeout" if isinstance(exc, SoftTimeLimitExceeded) else "render_failed"
         logger.exception("Document render job %s failed with %s", job_id, error_code)
+        # TEMP DIAGNOSTIC: surface the underlying exception via error_code (max 64 chars)
+        diag = f"{error_code}:{type(exc).__name__}:{str(exc)[:32]}"[:64]
+        error_code = diag
         DocumentRenderJob.objects.filter(pk=job_id).update(
             status=DocumentRenderJob.Status.FAILED,
             error_code=error_code,
