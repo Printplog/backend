@@ -53,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     procps \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv
@@ -64,12 +65,17 @@ COPY . .
 
 # Render attacker-influenced documents without root privileges. Object-storage
 # deployments do not need local persistence; filesystem deployments must mount
-# their shared media volume with uid/gid 10001 write access.
+# their shared media volume into /app/media. The entrypoint runs as root only
+# long enough to grant uid/gid 10001 ownership of that volume, then drops to
+# the unprivileged user before starting Celery (chromium refuses --no-sandbox
+# operation, so the browser must never run as root).
 RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/media /app/temp_uploads \
     && chown -R appuser:appuser /app/media /app/temp_uploads
-USER appuser
+COPY docker-worker-entrypoint.sh /app/docker-worker-entrypoint.sh
+RUN chmod +x /app/docker-worker-entrypoint.sh
+ENTRYPOINT ["/app/docker-worker-entrypoint.sh"]
 
 # A Celery inspect command has to boot Django and wait for a broker round trip.
 # Under load that regularly exceeds Docker's health timeout, leaving Swarm
