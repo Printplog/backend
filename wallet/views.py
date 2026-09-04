@@ -280,9 +280,9 @@ class CPayWebhookView(APIView):
         if CPayWebhookEvent.objects.filter(provider_transaction_id=provider_transaction_id).exists():
             return None, None
 
-        route = CPayDepositRoute.objects.select_for_update().select_related(
+        route = CPayDepositRoute.objects.select_related(
             "transaction__wallet__user"
-        ).get(pk=route_id, route_type=CPayDepositRoute.RouteType.DIRECT)
+        ).select_for_update(of=("self",)).get(pk=route_id, route_type=CPayDepositRoute.RouteType.DIRECT)
         wallet = route.transaction.wallet
         if route.transaction.status == Transaction.Status.PENDING:
             credited_tx = route.transaction
@@ -446,9 +446,9 @@ class CryptAPIWebhookView(APIView):
         if CryptAPIWebhookEvent.objects.filter(callback_id=callback_id).exists():
             return None, None
 
-        route = CPayDepositRoute.objects.select_for_update().select_related(
+        route = CPayDepositRoute.objects.select_related(
             "transaction__wallet__user"
-        ).get(pk=route_id, route_type=CPayDepositRoute.RouteType.CRYPTAPI_BRIDGE)
+        ).select_for_update(of=("self",)).get(pk=route_id, route_type=CPayDepositRoute.RouteType.CRYPTAPI_BRIDGE)
         wallet = route.transaction.wallet
         if route.transaction.status == Transaction.Status.PENDING:
             credited_tx = route.transaction
@@ -525,7 +525,7 @@ class CryptAPIWebhookView(APIView):
 
         with transaction.atomic():
             try:
-                tx = Transaction.objects.select_for_update().select_related("wallet__user").get(
+                tx = Transaction.objects.select_related("wallet__user").select_for_update(of=("self",)).get(
                     tx_id=tx_id,
                     type=Transaction.Type.DEPOSIT,
                 )

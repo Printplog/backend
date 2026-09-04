@@ -386,7 +386,7 @@ class V1DocumentDetailView(V1ApiView):
     def get_object(self, request, document_id, lock=False):
         queryset = PurchasedTemplate.objects.filter(buyer=request.api_customer).select_related("template")
         if lock:
-            queryset = queryset.select_for_update()
+            queryset = queryset.select_for_update(of=("self",))
         return get_object_or_404(queryset, pk=document_id)
 
     @extend_schema(
@@ -431,7 +431,7 @@ class V1DocumentUpgradeView(V1ApiView):
         require_scope(request, "documents:write")
         idempotency_key = _idempotency_key(request)
         document = get_object_or_404(
-            PurchasedTemplate.objects.select_for_update().select_related("template", "template__tool"),
+            PurchasedTemplate.objects.select_related("template", "template__tool").select_for_update(of=("self",)),
             pk=document_id,
             buyer=request.api_customer,
         )
@@ -880,7 +880,7 @@ def _embed_session(request, lock=False):
         raise AuthenticationFailed("Invalid embed session.")
     queryset = EmbedSession.objects.select_related("template", "template__tool", "document", "user", "api_key")
     if lock:
-        queryset = queryset.select_for_update()
+        queryset = queryset.select_for_update(of=("self",))
     try:
         session = queryset.get(token_hash=hash_secret(token.strip()))
     except EmbedSession.DoesNotExist as exc:
@@ -984,7 +984,7 @@ class PublicEmbedFinalizeView(APIView):
     @extend_schema(exclude=True)
     def post(self, request):
         unlocked = _embed_session(request)
-        session = EmbedSession.objects.select_for_update().select_related("template", "template__tool", "document", "user").get(pk=unlocked.pk)
+        session = EmbedSession.objects.select_related("template", "template__tool", "document", "user").select_for_update(of=("self",)).get(pk=unlocked.pk)
         if session.status == EmbedSession.Status.COMPLETED and session.document_id:
             return Response({"document_id": str(session.document_id), "status": "completed"})
         if session.status != EmbedSession.Status.PENDING:
