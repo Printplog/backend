@@ -499,3 +499,37 @@ class AdminDocuments(APIView):
                 {'error': 'Internal server error', 'details': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class AdminDocumentDetailView(APIView):
+    """Admin-only delete for a single purchased template (policy violations)."""
+    permission_classes = [IsAdminOrReadOnly]
+
+    def delete(self, request, document_id):
+        try:
+            doc = get_object_or_404(PurchasedTemplate, pk=document_id)
+            deleted = {
+                'id': str(doc.id),
+                'name': doc.name,
+                'buyer': doc.buyer.username if doc.buyer else None,
+                'template': doc.template.name if doc.template else None,
+            }
+
+            from analytics.utils import log_action
+            log_action(
+                actor=request.user,
+                action="DELETE_DOCUMENT",
+                target=f"{doc.name} ({doc.id})",
+                ip_address=request.META.get('REMOTE_ADDR')
+            )
+
+            doc.delete()
+            return Response(
+                {'message': 'Document deleted successfully', 'deleted_document': deleted},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {'error': 'Internal server error', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

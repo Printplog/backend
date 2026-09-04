@@ -3,7 +3,7 @@ from .views import (
     TemplateViewSet, AdminTemplateViewSet, PublicTemplateTrackingView,
     PurchasedTemplateViewSet, ToolViewSet, FontViewSet, SiteSettingsViewSet,
     TutorialViewSet, TransformVariableViewSet, ReferralViewSet,
-    DownloadDoc, IncrementDownloads, RemoveBackgroundView, AdminOverview, AdminUsers, AdminUserDetails, AdminDocuments,
+    DownloadDoc, IncrementDownloads, RemoveBackgroundView, AdminOverview, AdminUsers, AdminUserDetails, AdminDocuments, AdminDocumentDetailView,
     WalletStatsView, WalletListView, WalletAdjustView, PendingRequestsView, ApproveRequestView, RejectRequestView, TransactionHistoryView,
     PayoutListView, PayoutApproveView, PayoutRejectView,
     AiChatView, AiChatSessionViewSet, ContactView,
@@ -57,6 +57,7 @@ urlpatterns = [
     path("admin/users/", AdminUsers.as_view(), name="admin-users"),
     path("admin/users/<int:user_id>/", AdminUserDetails.as_view(), name="admin-user-details"),
     path("admin/documents/", AdminDocuments.as_view(), name="admin-documents"),
+    path("admin/documents/<uuid:document_id>/", AdminDocumentDetailView.as_view(), name="admin-document-detail"),
     
     # Admin Wallet Management
     path("admin/wallet/stats/", WalletStatsView.as_view(), name="admin-wallet-stats"),

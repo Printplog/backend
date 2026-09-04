@@ -4,7 +4,7 @@ from .tools import ToolViewSet
 from .fonts import FontViewSet
 from .tutorials import TutorialViewSet
 from .actions import DownloadDoc, IncrementDownloads, RemoveBackgroundView
-from .admin import AdminOverview, AdminUsers, AdminUserDetails, AdminDocuments
+from .admin import AdminOverview, AdminUsers, AdminUserDetails, AdminDocuments, AdminDocumentDetailView
 from .variables import TransformVariableViewSet
 from .settings import SiteSettingsViewSet
 from .referrals import ReferralViewSet
