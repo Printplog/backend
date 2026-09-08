@@ -281,7 +281,7 @@ class CryptoPaymentStatusView(APIView):
 
 
 class AlchemyWebhookView(APIView):
-    """Accept signed BNB address-activity notifications from Alchemy."""
+    """Accept signed BNB Address Activity or Custom notifications from Alchemy."""
 
     authentication_classes = []
     permission_classes = []
@@ -299,17 +299,25 @@ class AlchemyWebhookView(APIView):
         payload = request.data if isinstance(request.data, dict) else {}
         if payload.get("webhookId") != django_settings.ALCHEMY_WEBHOOK_ID:
             return Response({"detail": "Unknown webhook."}, status=status.HTTP_401_UNAUTHORIZED)
-        if payload.get("type") != "ADDRESS_ACTIVITY":
+        payload_type = payload.get("type")
+        if payload_type == "ADDRESS_ACTIVITY":
+            activities = (payload.get("event") or {}).get("activity") or []
+        elif payload_type == "GRAPHQL":
+            from wallet.alchemy import custom_webhook_activities
+
+            activities = custom_webhook_activities(payload)
+        else:
             return Response({"status": "OK", "ignored": True})
 
-        activities = (payload.get("event") or {}).get("activity") or []
         accepted = 0
         seen_hashes = set()
         for activity in activities:
             if not isinstance(activity, dict):
                 continue
             raw_contract = activity.get("rawContract") or {}
-            contract_address = str(raw_contract.get("address") or "").lower()
+            contract_address = str(
+                raw_contract.get("address") or activity.get("contractAddress") or ""
+            ).lower()
             recipient = str(activity.get("toAddress") or "").lower()
             transaction_hash = str(activity.get("hash") or "").lower()
             if (

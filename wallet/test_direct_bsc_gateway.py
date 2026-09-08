@@ -8,6 +8,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from wallet.alchemy import ERC20_TRANSFER_TOPIC, address_to_topic, register_webhook_address
 from wallet.blockchain import PreparedTokenTransfer, VerifiedTokenTransfer
 from wallet.deposits import sweep_direct_bsc_deposit
 from wallet.models import (
@@ -289,6 +290,88 @@ class DirectBSCGatewayTests(TestCase):
         self.assertEqual(response.data["accepted"], 1)
         self.user.wallet.refresh_from_db()
         self.assertEqual(self.user.wallet.balance, Decimal("7.50"))
+
+    @override_settings(
+        ALCHEMY_WEBHOOK_ID="wh_test",
+        ALCHEMY_WEBHOOK_SIGNING_KEY="test-signing-key",
+    )
+    @patch("wallet.deposits._after_credit")
+    @patch("wallet.blockchain.BSCWalletClient.verify_usdt_deposit")
+    def test_signed_alchemy_custom_webhook_claims_tracked_usdt_transfer(
+        self,
+        verify,
+        _after_credit,
+    ):
+        payment = self.client.post("/api/create-payment/", {}, format="json")
+        route = DirectBSCDepositAddress.objects.get(transaction_id=payment.data["transaction_id"])
+        verify.return_value = VerifiedTokenTransfer(
+            transaction_hash=TX_HASH,
+            sender_address=SENDER_ADDRESS,
+            recipient_address=route.address,
+            amount=Decimal("8.25"),
+            block_number=100,
+            confirmations=3,
+            confirmed=True,
+        )
+        payload = {
+            "webhookId": "wh_test",
+            "id": "whevt_graphql_test",
+            "type": "GRAPHQL",
+            "event": {
+                "data": {
+                    "block": {
+                        "logs": [{
+                            "account": {"address": USDT_ADDRESS},
+                            "topics": [
+                                ERC20_TRANSFER_TOPIC,
+                                address_to_topic(SENDER_ADDRESS),
+                                address_to_topic(route.address),
+                            ],
+                            "data": "0x" + ("0" * 64),
+                            "transaction": {"hash": TX_HASH, "status": 1},
+                        }]
+                    }
+                }
+            },
+        }
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        signature = hmac.new(b"test-signing-key", body, hashlib.sha256).hexdigest()
+
+        response = self.client.generic(
+            "POST",
+            "/api/webhook/alchemy/",
+            body,
+            content_type="application/json",
+            HTTP_X_ALCHEMY_SIGNATURE=signature,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["accepted"], 1)
+        self.user.wallet.refresh_from_db()
+        self.assertEqual(self.user.wallet.balance, Decimal("8.25"))
+
+    @override_settings(
+        ALCHEMY_WEBHOOK_ID="wh_test",
+        ALCHEMY_NOTIFY_AUTH_TOKEN="notify-token",
+        ALCHEMY_WEBHOOK_TYPE="graphql",
+        ALCHEMY_CUSTOM_ADDRESS_VARIABLE="sharptoolzDepositRecipients",
+        ALCHEMY_NOTIFY_TIMEOUT_SECONDS=10,
+    )
+    def test_custom_webhook_registration_adds_recipient_topic_to_variable(self):
+        session = Mock()
+        session.post.return_value.raise_for_status.return_value = None
+
+        register_webhook_address(SENDER_ADDRESS, session=session)
+
+        session.post.assert_called_once_with(
+            "https://dashboard.alchemy.com/api/graphql/variables/sharptoolzDepositRecipients",
+            headers={
+                "X-Alchemy-Token": "notify-token",
+                "Content-Type": "application/json",
+            },
+            json={"items": [address_to_topic(SENDER_ADDRESS)]},
+            timeout=10,
+        )
 
     @override_settings(
         ALCHEMY_WEBHOOK_ID="wh_test",
