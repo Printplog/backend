@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------------------
 
 # -- Stage 1: Build deps (mirrors Dockerfile so cache hits) -------------------
-FROM python:3.11-slim-bullseye AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -31,7 +31,7 @@ RUN poetry lock && poetry install --no-root && rm -rf $POETRY_CACHE_DIR
 
 
 # -- Stage 2: Runtime ---------------------------------------------------------
-FROM python:3.11-slim-bullseye AS runtime
+FROM python:3.11-slim-bookworm AS runtime
 
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
