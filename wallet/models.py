@@ -28,6 +28,7 @@ class Transaction(models.Model):
     tx_hash = models.CharField(max_length=255, blank=True, db_index=True)
     tx_id = models.CharField(max_length=36, unique=True, default=generate_tx_id)
     address = models.CharField(max_length=255, blank=True)
+    gateway = models.CharField(max_length=24, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -304,6 +305,85 @@ class CPayWebhookEvent(models.Model):
         return f"{self.provider_transaction_id}: {self.amount}"
 
 
+class OnChainDeposit(models.Model):
+    """A uniquely claimed BEP-20 transfer used to credit one SharpToolz wallet."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending confirmations"
+        CONFIRMED = "confirmed", "Confirmed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    transaction = models.OneToOneField(
+        Transaction,
+        on_delete=models.PROTECT,
+        related_name="onchain_deposit",
+    )
+    transaction_hash = models.CharField(max_length=66, unique=True)
+    chain_id = models.PositiveBigIntegerField(default=56)
+    token_contract = models.CharField(max_length=42)
+    sender_address = models.CharField(max_length=42)
+    recipient_address = models.CharField(max_length=42)
+    amount = models.DecimalField(max_digits=30, decimal_places=18)
+    credited_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    block_number = models.PositiveBigIntegerField()
+    confirmations = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["status", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.transaction_hash}: {self.amount} USDT ({self.status})"
+
+
+class DirectBSCDepositAddress(models.Model):
+    """A unique server-controlled BSC address assigned to one deposit request."""
+
+    class SweepStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        FUNDING = "funding", "Funding gas"
+        SWEEPING = "sweeping", "Sweeping"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    transaction = models.OneToOneField(
+        Transaction,
+        on_delete=models.PROTECT,
+        related_name="direct_bsc_route",
+    )
+    address = models.CharField(max_length=42, unique=True)
+    encrypted_private_key = models.TextField()
+    start_block = models.PositiveBigIntegerField()
+    last_scanned_block = models.PositiveBigIntegerField()
+    detected_at = models.DateTimeField(null=True, blank=True)
+    sweep_status = models.CharField(
+        max_length=12,
+        choices=SweepStatus.choices,
+        default=SweepStatus.PENDING,
+    )
+    gas_funding_transaction_hash = models.CharField(max_length=66, blank=True, default="")
+    gas_funding_signed_transaction = models.TextField(blank=True, default="")
+    sweep_transaction_hash = models.CharField(max_length=66, blank=True, default="")
+    sweep_signed_transaction = models.TextField(blank=True, default="")
+    swept_amount = models.DecimalField(max_digits=30, decimal_places=18, default=Decimal("0"))
+    sweep_error = models.TextField(blank=True, default="")
+    swept_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["last_scanned_block", "created_at"])]
+
+    def __str__(self):
+        return f"{self.transaction.tx_id}: {self.address}"
+
+
 class RevenueDistributionConfig(models.Model):
     """Singleton operational policy; provider credentials remain in env."""
 
@@ -418,6 +498,7 @@ class RevenueDistributionPayout(models.Model):
     idempotency_key = models.CharField(max_length=128, unique=True)
     provider_transaction_id = models.CharField(max_length=128, blank=True)
     transaction_hash = models.CharField(max_length=255, blank=True)
+    signed_transaction = models.TextField(blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
     error_message = models.TextField(blank=True)
     attempt_count = models.PositiveIntegerField(default=0)

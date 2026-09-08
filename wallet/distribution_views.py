@@ -19,7 +19,17 @@ from wallet.models import (
     RevenueDistributionPayout,
     RevenueShareRecipient,
 )
-from wallet.providers import CPayClient, PaymentProviderError, validate_bep20_address
+from wallet.providers import (
+    CPayClient,
+    PaymentProviderError,
+    deposit_provider_configured,
+    direct_bsc_enabled,
+    gateway_label,
+    get_payout_provider,
+    live_payouts_enabled,
+    payout_provider_configured,
+    validate_bep20_address,
+)
 from wallet.tasks import check_revenue_distribution, execute_revenue_distribution
 
 
@@ -102,15 +112,15 @@ class DistributionDashboardView(APIView):
                     ),
                     "network": "BEP20",
                     "currency": "USDT",
+                    "provider": "bsc" if direct_bsc_enabled() else "cpay",
+                    "provider_label": gateway_label(),
                     "allocation_total": str(allocation),
-                    "deposit_routing_enabled": settings.CPAY_DEPOSIT_ROUTING_ENABLED,
-                    "deposit_provider_configured": bool(
-                        CPayClient.deposit_configured()
-                        and settings.CRYPTAPI_CALLBACK_BASE_URL
-                        and settings.CRYPTAPI_REQUIRE_SIGNATURE
+                    "deposit_routing_enabled": (
+                        direct_bsc_enabled() or settings.CPAY_DEPOSIT_ROUTING_ENABLED
                     ),
-                    "live_payouts_enabled": settings.CPAY_LIVE_PAYOUTS_ENABLED,
-                    "payout_provider_configured": CPayClient.payout_configured(),
+                    "deposit_provider_configured": deposit_provider_configured(),
+                    "live_payouts_enabled": live_payouts_enabled(),
+                    "payout_provider_configured": payout_provider_configured(),
                 },
                 "recipients": [_serialize_recipient(item) for item in recipients],
                 "batches": [_serialize_batch(batch) for batch in batches],
@@ -212,7 +222,7 @@ class DistributionConfigurationView(APIView):
             log_action(
                 actor=request.user,
                 action="UPDATE_REVENUE_DISTRIBUTION",
-                target="CPay revenue distribution",
+                target=f"{gateway_label()} revenue distribution",
                 ip_address=request.META.get("REMOTE_ADDR"),
                 details={
                     "enabled": enabled,
@@ -230,10 +240,10 @@ class DistributionBalanceView(APIView):
     throttle_scope = "admin_read"
 
     def post(self, request):
-        if not CPayClient.payout_configured():
-            return Response({"detail": "CPay payout wallet credentials are not configured."}, status=status.HTTP_409_CONFLICT)
+        if not payout_provider_configured():
+            return Response({"detail": "The payout wallet is not configured."}, status=status.HTTP_409_CONFLICT)
         try:
-            balance = CPayClient().get_available_usdt_balance()
+            balance = get_payout_provider().get_available_usdt_balance()
         except PaymentProviderError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         RevenueDistributionConfig.objects.filter(pk=1).update(
@@ -251,13 +261,13 @@ class DistributionRunView(APIView):
         totp_error = _require_totp(request)
         if totp_error:
             return Response({"detail": totp_error}, status=status.HTTP_403_FORBIDDEN)
-        if not settings.CPAY_LIVE_PAYOUTS_ENABLED:
-            return Response({"detail": "Live CPay payouts are locked by the server environment."}, status=status.HTTP_409_CONFLICT)
+        if not live_payouts_enabled():
+            return Response({"detail": "Live payouts are locked by the server environment."}, status=status.HTTP_409_CONFLICT)
         result = check_revenue_distribution.delay(force=True)
         log_action(
             actor=request.user,
             action="RUN_REVENUE_DISTRIBUTION",
-            target="CPay revenue distribution",
+            target=f"{gateway_label()} revenue distribution",
             ip_address=request.META.get("REMOTE_ADDR"),
             details={"task_id": result.id},
         )
@@ -272,11 +282,11 @@ class DistributionRetryView(APIView):
         totp_error = _require_totp(request)
         if totp_error:
             return Response({"detail": totp_error}, status=status.HTTP_403_FORBIDDEN)
-        if not settings.CPAY_LIVE_PAYOUTS_ENABLED:
-            return Response({"detail": "Live CPay payouts are locked by the server environment."}, status=status.HTTP_409_CONFLICT)
+        if not live_payouts_enabled():
+            return Response({"detail": "Live payouts are locked by the server environment."}, status=status.HTTP_409_CONFLICT)
 
         try:
-            available_balance = CPayClient().get_available_usdt_balance()
+            available_balance = get_payout_provider().get_available_usdt_balance()
         except PaymentProviderError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         whole_balance = available_balance.quantize(Decimal("1"), rounding=ROUND_DOWN).quantize(
@@ -319,10 +329,11 @@ class DistributionRetryView(APIView):
             for payout in payouts:
                 if payout.status != RevenueDistributionPayout.Status.FAILED:
                     continue
-                # CPay can replay a rejected validation response for an
-                # idempotency key even when no provider transaction exists.
-                payout.provider_transaction_id = ""
-                payout.idempotency_key = f"sharptoolz-revenue-{payout.id}-retry-{uuid.uuid4()}"
+                # Rotate the application idempotency key when a provider
+                # rejected the request before creating any transaction.
+                if not direct_bsc_enabled():
+                    payout.provider_transaction_id = ""
+                    payout.idempotency_key = f"sharptoolz-revenue-{payout.id}-retry-{uuid.uuid4()}"
                 payout.status = RevenueDistributionPayout.Status.PENDING
                 payout.error_message = ""
                 payout.save(update_fields=[

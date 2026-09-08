@@ -27,6 +27,14 @@ app.conf.beat_schedule = {
         "task": "wallet.tasks.check_revenue_distribution",
         "schedule": crontab(minute="*"),
     },
+    "wallet-scan-pending-bsc-deposits": {
+        "task": "wallet.tasks.scan_pending_bsc_deposits",
+        "schedule": crontab(minute="*"),
+    },
+    "wallet-recover-pending-bsc-sweeps": {
+        "task": "wallet.tasks.recover_pending_bsc_sweeps",
+        "schedule": crontab(minute="*"),
+    },
     "wallet-reconcile-revenue-distributions": {
         "task": "wallet.tasks.reconcile_revenue_distributions",
         "schedule": crontab(minute="*/2"),

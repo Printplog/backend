@@ -45,3 +45,41 @@ backend services.
 The OpenAPI contract is served at `/api/v1/schema` and interactive docs at
 `/api/v1/docs`. The hosted UI loader is served by the frontend at
 `https://sharptoolz.com/embed/v1.js`.
+
+## Direct BNB Chain payment gateway
+
+The wallet app can receive and distribute USDT directly on BNB Smart Chain.
+Deploy the migration first, then configure the same values on the web, Celery
+worker, and Celery beat services:
+
+```text
+PAYMENT_GATEWAY_PROVIDER=bsc
+BSC_RPC_URL=https://your-dedicated-bsc-rpc.example
+BSC_CHAIN_ID=56
+BSC_USDT_CONTRACT_ADDRESS=0x55d398326f99059fF775485246999027B3197955
+BSC_GATEWAY_WALLET_ADDRESS=0xYourDedicatedGatewayWallet
+BSC_GATEWAY_PRIVATE_KEY=your-protected-runtime-secret
+BSC_REQUIRED_CONFIRMATIONS=3
+BSC_RPC_TIMEOUT_SECONDS=15
+BSC_GAS_LIMIT_MULTIPLIER_PERCENT=120
+BSC_LIVE_PAYOUTS_ENABLED=False
+BSC_LIVE_SWEEPS_ENABLED=False
+BSC_SWEEP_GAS_FUNDING_MULTIPLIER_PERCENT=125
+```
+
+`BSC_GATEWAY_PRIVATE_KEY` must control `BSC_GATEWAY_WALLET_ADDRESS`. Store it
+only in the deployment platform's encrypted secret store; never commit it or
+send it through logs or chat. Keep enough BNB in this wallet for transaction
+gas. Use a dedicated, limited-balance gateway wallet rather than the main
+treasury wallet.
+
+When `BSC_LIVE_SWEEPS_ENABLED=True`, each confirmed unique deposit address is
+funded with only the BNB it needs for gas, then its full USDT balance is swept
+into `BSC_GATEWAY_WALLET_ADDRESS`. Signed transactions and hashes are persisted
+before broadcast so worker retries do not create duplicate transfers.
+
+Start with `BSC_LIVE_PAYOUTS_ENABLED=False`. Verify a small real deposit and
+confirm that it credits once, then fund the wallet with a small amount of BNB
+and enable live payouts for a controlled distribution test. The old CPay
+variables may remain during the rollback window but are ignored while
+`PAYMENT_GATEWAY_PROVIDER=bsc`.

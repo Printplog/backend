@@ -7,7 +7,7 @@ class TransactionSerializer(serializers.ModelSerializer):
         model = Transaction
         fields = [
             'id', 'tx_id', 'type', 'amount', 'status',
-            'description', 'tx_hash', 'address', 'created_at'
+            'description', 'tx_hash', 'address', 'gateway', 'created_at'
         ]
 
 

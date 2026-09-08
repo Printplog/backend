@@ -7,19 +7,139 @@ from celery import shared_task
 from celery.exceptions import Retry
 from django.conf import settings
 from django.db import close_old_connections, transaction
+from django.db.utils import OperationalError
+from django.db.models import F
 from django.utils import timezone
 from wallet.models import (
     DepositBonus,
+    DirectBSCDepositAddress,
+    OnChainDeposit,
     RevenueDistributionBatch,
     RevenueDistributionConfig,
     RevenueDistributionPayout,
     RevenueShareRecipient,
+    Transaction,
     Wallet,
 )
-from wallet.providers import CPayClient, PaymentProviderError
+from wallet.providers import (
+    CPayClient,
+    PaymentProviderError,
+    direct_bsc_enabled,
+    gateway_label,
+    get_payout_provider,
+    live_payouts_enabled,
+    payout_provider_configured,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(
+    bind=True,
+    name="wallet.tasks.register_bsc_deposit_address",
+    autoretry_for=(PaymentProviderError,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=5,
+)
+def register_bsc_deposit_address(self, route_id: str):
+    """Subscribe a generated address to the production Alchemy webhook."""
+    try:
+        route = DirectBSCDepositAddress.objects.get(pk=route_id)
+    except DirectBSCDepositAddress.DoesNotExist:
+        return {"status": "missing"}
+    from wallet.alchemy import address_registration_configured, register_webhook_address
+
+    if not address_registration_configured():
+        return {"status": "not_configured"}
+    register_webhook_address(route.address)
+    return {"status": "registered", "address": route.address}
+
+
+@shared_task(name="wallet.tasks.scan_pending_bsc_deposits")
+def scan_pending_bsc_deposits():
+    """Discover incoming USDT for active direct-payment addresses."""
+    close_old_connections()
+    scanned = 0
+    detected = 0
+    errors = 0
+    try:
+        route_ids = list(
+            DirectBSCDepositAddress.objects.filter(
+                transaction__gateway="direct_bsc",
+                transaction__status=Transaction.Status.PENDING,
+            ).values_list("id", flat=True)[:250]
+        )
+        from wallet.deposits import DepositClaimError, scan_direct_bsc_deposit
+
+        for route_id in route_ids:
+            try:
+                result = scan_direct_bsc_deposit(route_id=route_id)
+                scanned += 1
+                if result:
+                    detected += 1
+            except (PaymentProviderError, DepositClaimError) as exc:
+                errors += 1
+                logger.warning("Automatic BSC scan failed for route %s: %s", route_id, exc)
+        return {"scanned": scanned, "detected": detected, "errors": errors}
+    finally:
+        close_old_connections()
+
+
+@shared_task(bind=True, name="wallet.tasks.sweep_bsc_deposit", max_retries=40)
+def sweep_bsc_deposit(self, route_id: str):
+    """Collect confirmed USDT from a unique address into the treasury wallet."""
+    close_old_connections()
+    try:
+        from wallet.deposits import sweep_direct_bsc_deposit
+
+        try:
+            result = sweep_direct_bsc_deposit(route_id=route_id)
+        except DirectBSCDepositAddress.DoesNotExist:
+            return {"status": "missing"}
+        except (PaymentProviderError, OperationalError) as exc:
+            try:
+                DirectBSCDepositAddress.objects.filter(pk=route_id).update(
+                    sweep_error=str(exc)[:1000]
+                )
+            except OperationalError:
+                # SQLite can still hold the same local-development write lock;
+                # the task retry is more important than persisting this message.
+                pass
+            raise self.retry(exc=exc, countdown=15)
+
+        if result["status"] in {
+            "gas_submitted",
+            "gas_confirming",
+            "sweep_submitted",
+            "sweep_confirming",
+        }:
+            raise self.retry(countdown=10)
+        return result
+    finally:
+        close_old_connections()
+
+
+@shared_task(name="wallet.tasks.recover_pending_bsc_sweeps")
+def recover_pending_bsc_sweeps():
+    """Requeue confirmed deposits whose collection was interrupted."""
+    if not settings.BSC_LIVE_SWEEPS_ENABLED:
+        return {"queued": 0, "status": "disabled"}
+    route_ids = list(
+        DirectBSCDepositAddress.objects.filter(
+            transaction__onchain_deposit__status=OnChainDeposit.Status.CONFIRMED,
+            sweep_status__in=(
+                DirectBSCDepositAddress.SweepStatus.PENDING,
+                DirectBSCDepositAddress.SweepStatus.FUNDING,
+                DirectBSCDepositAddress.SweepStatus.SWEEPING,
+            ),
+        ).values_list("id", flat=True)[:100]
+    )
+    for route_id in route_ids:
+        sweep_bsc_deposit.delay(str(route_id))
+    return {"queued": len(route_ids)}
 
 
 @shared_task
@@ -108,14 +228,14 @@ def check_revenue_distribution(self, force=False):
         current_config = RevenueDistributionConfig.get_config()
         if not (current_config.enabled or force):
             return {"created": False, "reason": "disabled"}
-        if not CPayClient.payout_configured():
+        if not payout_provider_configured():
             return {"created": False, "reason": "payout_provider_not_configured"}
 
         recovery = _requeue_stale_distribution_batch()
         if recovery:
             return recovery
 
-        provider = CPayClient()
+        provider = get_payout_provider()
         balance = provider.get_available_usdt_balance()
 
         with transaction.atomic():
@@ -126,7 +246,7 @@ def check_revenue_distribution(self, force=False):
 
             if not (config.enabled or force):
                 return {"created": False, "reason": "disabled", "balance": str(balance)}
-            if not settings.CPAY_LIVE_PAYOUTS_ENABLED:
+            if not live_payouts_enabled():
                 return {"created": False, "reason": "live_payouts_disabled", "balance": str(balance)}
             if RevenueDistributionBatch.objects.filter(status__in=ACTIVE_BATCH_STATUSES).exists():
                 return {"created": False, "reason": "batch_in_progress", "balance": str(balance)}
@@ -194,26 +314,46 @@ def execute_revenue_distribution(self, batch_id: str):
             batch.error_message = ""
             batch.save(update_fields=["status", "error_message", "updated_at"])
 
-        provider = CPayClient()
+        provider = get_payout_provider()
         payouts = RevenueDistributionPayout.objects.filter(batch_id=batch_id).order_by("created_at")
         for payout in payouts:
-            if payout.provider_transaction_id:
+            if payout.provider_transaction_id and not direct_bsc_enabled():
                 continue
             try:
-                provider_id = provider.withdraw_usdt(
-                    to=payout.bep20_address,
-                    amount=payout.amount,
-                    idempotency_key=payout.idempotency_key,
-                )
+                if direct_bsc_enabled():
+                    from wallet.blockchain import PreparedTokenTransfer
+
+                    if payout.signed_transaction and payout.provider_transaction_id:
+                        prepared = PreparedTokenTransfer(
+                            transaction_hash=payout.provider_transaction_id,
+                            signed_transaction=payout.signed_transaction,
+                        )
+                    else:
+                        prepared = provider.prepare_usdt_transfer(
+                            to=payout.bep20_address,
+                            amount=payout.amount,
+                        )
+                        RevenueDistributionPayout.objects.filter(pk=payout.pk).update(
+                            provider_transaction_id=prepared.transaction_hash,
+                            transaction_hash=prepared.transaction_hash,
+                            signed_transaction=prepared.signed_transaction,
+                        )
+                    provider_id = provider.broadcast_prepared_transfer(prepared)
+                else:
+                    provider_id = provider.withdraw_usdt(
+                        to=payout.bep20_address,
+                        amount=payout.amount,
+                        idempotency_key=payout.idempotency_key,
+                    )
             except PaymentProviderError as exc:
                 RevenueDistributionPayout.objects.filter(pk=payout.pk).update(
                     status=RevenueDistributionPayout.Status.FAILED,
                     error_message=str(exc),
-                    attempt_count=payout.attempt_count + 1,
+                    attempt_count=F("attempt_count") + 1,
                 )
                 RevenueDistributionBatch.objects.filter(pk=batch_id).update(
                     status=RevenueDistributionBatch.Status.FAILED,
-                    error_message="One or more CPay transfers could not be submitted.",
+                    error_message=f"One or more {gateway_label()} transfers could not be submitted.",
                 )
                 raise self.retry(exc=exc, countdown=min(30 * (2 ** self.request.retries), 600))
 
@@ -221,7 +361,7 @@ def execute_revenue_distribution(self, batch_id: str):
                 provider_transaction_id=provider_id,
                 status=RevenueDistributionPayout.Status.SUBMITTED,
                 error_message="",
-                attempt_count=payout.attempt_count + 1,
+                attempt_count=F("attempt_count") + 1,
                 submitted_at=timezone.now(),
             )
 
@@ -248,32 +388,29 @@ def execute_revenue_distribution(self, batch_id: str):
     max_retries=3,
 )
 def reconcile_revenue_distributions(self):
-    provider = CPayClient()
+    provider = get_payout_provider()
     submitted = RevenueDistributionPayout.objects.filter(
         status=RevenueDistributionPayout.Status.SUBMITTED,
         provider_transaction_id__gt="",
     ).select_related("batch")
     touched_batches = set()
     for payout in submitted.iterator():
-        entity = provider.find_transaction(payout.provider_transaction_id)
-        if not entity:
-            continue
-        provider_status = str(entity.get("systemStatus") or entity.get("status") or "")
+        provider_status = provider.get_transfer_status(payout.provider_transaction_id)
         touched_batches.add(payout.batch_id)
-        if provider_status in {"Done", "DepositComplete", "ReceiveComplete"}:
-            hashes = (entity.get("info") or {}).get("hashs") or []
+        if provider_status.status == "completed":
             payout.status = RevenueDistributionPayout.Status.COMPLETED
-            payout.transaction_hash = str(hashes[-1]) if hashes else ""
+            payout.transaction_hash = provider_status.transaction_hash
             payout.completed_at = timezone.now()
             payout.error_message = ""
             payout.save(update_fields=[
                 "status", "transaction_hash", "completed_at", "error_message", "updated_at",
             ])
             _queue_payout_email(payout)
-        elif provider_status in {"Error", "Failed"}:
+        elif provider_status.status == "failed":
             payout.status = RevenueDistributionPayout.Status.FAILED
-            payout.error_message = f"CPay reported {provider_status}."
-            payout.save(update_fields=["status", "error_message", "updated_at"])
+            payout.transaction_hash = provider_status.transaction_hash
+            payout.error_message = f"{gateway_label()} reported a failed transfer."
+            payout.save(update_fields=["status", "transaction_hash", "error_message", "updated_at"])
 
     for batch_id in touched_batches:
         _refresh_batch_status(batch_id)
@@ -290,7 +427,7 @@ def _refresh_batch_status(batch_id):
             batch.error_message = ""
         elif RevenueDistributionPayout.Status.FAILED in statuses:
             batch.status = RevenueDistributionBatch.Status.FAILED
-            batch.error_message = "One or more CPay transfers failed. Review and retry this batch."
+            batch.error_message = f"One or more {gateway_label()} transfers failed. Review and retry this batch."
         else:
             batch.status = RevenueDistributionBatch.Status.SUBMITTED
         batch.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
@@ -318,3 +455,38 @@ def _queue_payout_email(payout):
         RevenueDistributionPayout.objects.filter(pk=payout.pk, email_sent_at=queued_at).update(
             email_sent_at=None
         )
+
+
+@shared_task(bind=True, name="wallet.tasks.reconcile_onchain_deposit", max_retries=20)
+def reconcile_onchain_deposit(self, receipt_id: str):
+    """Finish a claimed direct deposit after it reaches the confirmation threshold."""
+    close_old_connections()
+    try:
+        try:
+            receipt = OnChainDeposit.objects.select_related(
+                "transaction__wallet__user"
+            ).get(pk=receipt_id)
+        except OnChainDeposit.DoesNotExist:
+            return {"status": "missing"}
+        if receipt.status == OnChainDeposit.Status.CONFIRMED:
+            return {"status": "confirmed"}
+
+        from wallet.deposits import DepositClaimError, verify_and_credit_onchain_deposit
+
+        try:
+            result = verify_and_credit_onchain_deposit(
+                transaction_id=receipt.transaction_id,
+                user_id=receipt.transaction.wallet.user_id,
+                transaction_hash=receipt.transaction_hash,
+            )
+        except DepositClaimError as exc:
+            logger.warning("Direct deposit %s could not be credited: %s", receipt_id, exc)
+            return {"status": "rejected", "reason": str(exc)}
+        except PaymentProviderError as exc:
+            raise self.retry(exc=exc, countdown=30)
+
+        if not result.confirmed:
+            return {"status": "pending", "confirmations": result.confirmations}
+        return {"status": "confirmed", "credited": result.credited}
+    finally:
+        close_old_connections()

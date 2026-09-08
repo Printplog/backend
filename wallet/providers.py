@@ -1,6 +1,7 @@
 import base64
 import logging
 import re
+from dataclasses import dataclass
 from decimal import Decimal
 
 import requests
@@ -23,6 +24,13 @@ ox7pp208zTvown577wIDAQAB
 
 class PaymentProviderError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class PayoutTransferStatus:
+    status: str
+    transaction_hash: str = ""
+    confirmations: int = 0
 
 
 def validate_bep20_address(value: str) -> str:
@@ -296,3 +304,58 @@ class CPayClient:
             if len(entities) < page_size:
                 break
         return None
+
+    def get_transfer_status(self, transaction_id: str) -> PayoutTransferStatus:
+        entity = self.find_transaction(transaction_id)
+        if not entity:
+            return PayoutTransferStatus(status="pending")
+        provider_status = str(entity.get("systemStatus") or entity.get("status") or "")
+        hashes = (entity.get("info") or {}).get("hashs") or []
+        transaction_hash = str(hashes[-1]) if hashes else ""
+        if provider_status in {"Done", "DepositComplete", "ReceiveComplete"}:
+            return PayoutTransferStatus(status="completed", transaction_hash=transaction_hash)
+        if provider_status in {"Error", "Failed"}:
+            return PayoutTransferStatus(status="failed", transaction_hash=transaction_hash)
+        return PayoutTransferStatus(status="pending", transaction_hash=transaction_hash)
+
+
+def direct_bsc_enabled() -> bool:
+    return settings.PAYMENT_GATEWAY_PROVIDER == "bsc"
+
+
+def get_payout_provider():
+    if direct_bsc_enabled():
+        from wallet.blockchain import BSCWalletClient
+
+        return BSCWalletClient()
+    return CPayClient()
+
+
+def deposit_provider_configured() -> bool:
+    if direct_bsc_enabled():
+        from wallet.blockchain import BSCWalletClient
+
+        return BSCWalletClient.deposit_configured()
+    return bool(
+        CPayClient.deposit_configured()
+        and settings.CRYPTAPI_CALLBACK_BASE_URL
+        and settings.CRYPTAPI_REQUIRE_SIGNATURE
+    )
+
+
+def payout_provider_configured() -> bool:
+    if direct_bsc_enabled():
+        from wallet.blockchain import BSCWalletClient
+
+        return BSCWalletClient.payout_configured()
+    return CPayClient.payout_configured()
+
+
+def live_payouts_enabled() -> bool:
+    if direct_bsc_enabled():
+        return settings.BSC_LIVE_PAYOUTS_ENABLED
+    return settings.CPAY_LIVE_PAYOUTS_ENABLED
+
+
+def gateway_label() -> str:
+    return "Direct BNB Chain" if direct_bsc_enabled() else "CPay"

@@ -46,6 +46,40 @@ class CPayWebhookEventAdmin(admin.ModelAdmin):
     readonly_fields = ('route', 'provider_transaction_id', 'tx_hash', 'amount', 'credited_transaction')
 
 
+@admin.register(OnChainDeposit)
+class OnChainDepositAdmin(admin.ModelAdmin):
+    list_display = (
+        'transaction_hash', 'transaction', 'amount', 'credited_amount',
+        'confirmations', 'status', 'created_at',
+    )
+    list_filter = ('status', 'chain_id', 'created_at')
+    search_fields = (
+        'transaction_hash', 'sender_address', 'recipient_address',
+        'transaction__tx_id', 'transaction__wallet__user__email',
+    )
+    readonly_fields = (
+        'transaction', 'transaction_hash', 'chain_id', 'token_contract',
+        'sender_address', 'recipient_address', 'amount', 'credited_amount',
+        'block_number', 'confirmations', 'status', 'created_at', 'updated_at',
+    )
+
+
+@admin.register(DirectBSCDepositAddress)
+class DirectBSCDepositAddressAdmin(admin.ModelAdmin):
+    list_display = (
+        'address', 'transaction', 'sweep_status', 'swept_amount',
+        'start_block', 'last_scanned_block', 'detected_at', 'swept_at', 'created_at',
+    )
+    list_filter = ('sweep_status', 'created_at')
+    search_fields = ('address', 'transaction__tx_id', 'transaction__wallet__user__email')
+    readonly_fields = (
+        'transaction', 'address', 'encrypted_private_key', 'start_block',
+        'last_scanned_block', 'detected_at', 'sweep_status',
+        'gas_funding_transaction_hash', 'sweep_transaction_hash',
+        'swept_amount', 'sweep_error', 'swept_at', 'created_at', 'updated_at',
+    )
+
+
 @admin.register(RevenueDistributionConfig)
 class RevenueDistributionConfigAdmin(admin.ModelAdmin):
     list_display = ('enabled', 'threshold_amount', 'last_available_balance', 'last_balance_checked_at')

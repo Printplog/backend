@@ -51,6 +51,7 @@ dependencies = [
     "defusedxml (>=0.7.1,<0.8.0)",
     "cryptography (>=45.0.4,<51.0.0)",
     "pyotp (>=2.9.0,<3.0.0)",
+    "web3 (>=7.14,<8.0)",
 ]
 
 

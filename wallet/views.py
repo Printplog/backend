@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import timedelta
 
 from django.conf import settings as django_settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
 from django.http import HttpResponse
 from rest_framework.views import APIView
@@ -14,7 +15,14 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 
-from wallet.models import CPayDepositRoute, CPayWebhookEvent, CryptAPIWebhookEvent, Transaction
+from wallet.models import (
+    CPayDepositRoute,
+    CPayWebhookEvent,
+    CryptAPIWebhookEvent,
+    DirectBSCDepositAddress,
+    OnChainDeposit,
+    Transaction,
+)
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from wallet.serializers import WalletSerializer
@@ -25,7 +33,13 @@ from wallet.provider_security import (
     decrypt_payment_secret,
     encrypt_payment_secret,
 )
-from wallet.providers import CPayClient, CryptAPIClient, PaymentProviderError, verify_cryptapi_signature
+from wallet.providers import (
+    CPayClient,
+    CryptAPIClient,
+    PaymentProviderError,
+    direct_bsc_enabled,
+    verify_cryptapi_signature,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -98,40 +112,52 @@ class CreateCryptoPaymentView(APIView):
             amount=Decimal("0.00"),
             tx_id=tx_id,
             description="Wallet Funding",
+            gateway="direct_bsc" if direct_bsc_enabled() else "cryptapi_cpay",
         )
 
         try:
-            if not django_settings.CPAY_DEPOSIT_ROUTING_ENABLED:
-                raise PaymentProviderError("CryptAPI to CPay deposit routing is disabled.")
-            if not CPayClient.deposit_configured():
-                raise PaymentProviderError("CPay deposits are not configured.")
-            if not django_settings.CRYPTAPI_CALLBACK_BASE_URL:
-                raise PaymentProviderError("CryptAPI callbacks are not configured.")
+            if direct_bsc_enabled():
+                from wallet.blockchain import BSCWalletClient
+                from wallet.deposits import create_direct_bsc_deposit_address
 
-            cpay_wallet = CPayClient().create_client_wallet()
-            callback_nonce = secrets.token_urlsafe(32)
-            separator = "&" if "?" in django_settings.CRYPTAPI_CALLBACK_BASE_URL else "?"
-            callback_url = (
-                f"{django_settings.CRYPTAPI_CALLBACK_BASE_URL}{separator}"
-                f"payment={tx_id}&nonce={callback_nonce}"
-            )
-            route = CPayDepositRoute.objects.create(
-                transaction=tx,
-                route_type=CPayDepositRoute.RouteType.CRYPTAPI_BRIDGE,
-                client_reference=str(tx_id),
-                cpay_wallet_id=cpay_wallet["id"],
-                cpay_address=cpay_wallet["address"],
-                encrypted_passphrase=encrypt_payment_secret(cpay_wallet["passphrase"]),
-                encrypted_callback_nonce=encrypt_payment_secret(callback_nonce),
-                cryptapi_callback_url=encrypt_payment_secret(callback_url),
-            )
-            data = CryptAPIClient().create_address(
-                destination_address=cpay_wallet["address"],
-                callback_url=callback_url,
-            )
-            payment_address = data["address_in"]
-            route.cryptapi_address_in = payment_address
-            route.save(update_fields=["cryptapi_address_in", "updated_at"])
+                if not BSCWalletClient.deposit_configured():
+                    raise PaymentProviderError("The direct BNB Chain gateway is not configured.")
+                route = create_direct_bsc_deposit_address(payment=tx)
+                payment_address = route.address
+                gateway = "direct_bsc"
+            else:
+                if not django_settings.CPAY_DEPOSIT_ROUTING_ENABLED:
+                    raise PaymentProviderError("CryptAPI to CPay deposit routing is disabled.")
+                if not CPayClient.deposit_configured():
+                    raise PaymentProviderError("CPay deposits are not configured.")
+                if not django_settings.CRYPTAPI_CALLBACK_BASE_URL:
+                    raise PaymentProviderError("CryptAPI callbacks are not configured.")
+
+                cpay_wallet = CPayClient().create_client_wallet()
+                callback_nonce = secrets.token_urlsafe(32)
+                separator = "&" if "?" in django_settings.CRYPTAPI_CALLBACK_BASE_URL else "?"
+                callback_url = (
+                    f"{django_settings.CRYPTAPI_CALLBACK_BASE_URL}{separator}"
+                    f"payment={tx_id}&nonce={callback_nonce}"
+                )
+                route = CPayDepositRoute.objects.create(
+                    transaction=tx,
+                    route_type=CPayDepositRoute.RouteType.CRYPTAPI_BRIDGE,
+                    client_reference=str(tx_id),
+                    cpay_wallet_id=cpay_wallet["id"],
+                    cpay_address=cpay_wallet["address"],
+                    encrypted_passphrase=encrypt_payment_secret(cpay_wallet["passphrase"]),
+                    encrypted_callback_nonce=encrypt_payment_secret(callback_nonce),
+                    cryptapi_callback_url=encrypt_payment_secret(callback_url),
+                )
+                data = CryptAPIClient().create_address(
+                    destination_address=cpay_wallet["address"],
+                    callback_url=callback_url,
+                )
+                payment_address = data["address_in"]
+                gateway = "cryptapi_cpay"
+                route.cryptapi_address_in = payment_address
+                route.save(update_fields=["cryptapi_address_in", "updated_at"])
         except PaymentProviderError:
             logger.exception("Payment route creation failed for transaction %s", tx_id)
             tx.status = Transaction.Status.FAILED
@@ -156,8 +182,166 @@ class CreateCryptoPaymentView(APIView):
             "payment_address": payment_address,
             "tx_id": tx.tx_id,
             "network": "BEP20",
-            "gateway": "cryptapi_cpay",
+            "gateway": gateway,
+            "required_confirmations": (
+                django_settings.BSC_REQUIRED_CONFIRMATIONS if direct_bsc_enabled() else 1
+            ),
         }, status=status.HTTP_201_CREATED)
+
+
+class ConfirmCryptoPaymentView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "wallet_write"
+
+    def post(self, request):
+        if not direct_bsc_enabled():
+            return Response(
+                {"detail": "Direct blockchain payment verification is not enabled."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        transaction_id = request.data.get("id")
+        transaction_hash = str(request.data.get("transaction_hash") or "").strip()
+        if not transaction_id or not transaction_hash:
+            return Response(
+                {"detail": "Deposit request and transaction hash are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from wallet.deposits import DepositClaimError, verify_and_credit_onchain_deposit
+
+        try:
+            result = verify_and_credit_onchain_deposit(
+                transaction_id=transaction_id,
+                user_id=request.user.id,
+                transaction_hash=transaction_hash,
+            )
+        except DepositClaimError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except PaymentProviderError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        response_status = status.HTTP_200_OK if result.confirmed else status.HTTP_202_ACCEPTED
+        return Response(
+            {
+                "transaction_id": result.transaction_id,
+                "transaction_hash": result.transaction_hash,
+                "amount": str(result.amount),
+                "confirmations": result.confirmations,
+                "required_confirmations": result.required_confirmations,
+                "confirmed": result.confirmed,
+                "credited": result.credited,
+            },
+            status=response_status,
+        )
+
+
+class CryptoPaymentStatusView(APIView):
+    """Poll and scan one direct payment without requiring a customer-supplied hash."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "wallet_write"
+
+    def get(self, request, payment_id):
+        try:
+            payment = Transaction.objects.select_related("wallet__user").get(
+                pk=payment_id,
+                wallet__user_id=request.user.id,
+                type=Transaction.Type.DEPOSIT,
+            )
+        except Transaction.DoesNotExist:
+            return Response({"detail": "Deposit request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if payment.gateway == "direct_bsc" and payment.status == Transaction.Status.PENDING:
+            try:
+                route = payment.direct_bsc_route
+                from wallet.deposits import scan_direct_bsc_deposit
+
+                scan_direct_bsc_deposit(route_id=route.id)
+            except ObjectDoesNotExist:
+                route = None
+            except PaymentProviderError as exc:
+                logger.warning("Automatic BSC deposit scan failed for %s: %s", payment.id, exc)
+                return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        payment.refresh_from_db()
+        receipt = OnChainDeposit.objects.filter(transaction=payment).first()
+        return Response(
+            {
+                "transaction_id": str(payment.id),
+                "status": payment.status,
+                "detected": receipt is not None,
+                "transaction_hash": receipt.transaction_hash if receipt else "",
+                "amount": str(receipt.amount if receipt else payment.amount),
+                "confirmations": receipt.confirmations if receipt else 0,
+                "required_confirmations": django_settings.BSC_REQUIRED_CONFIRMATIONS,
+                "credited": payment.status == Transaction.Status.COMPLETED,
+                "automatic_monitoring": hasattr(payment, "direct_bsc_route"),
+            }
+        )
+
+
+class AlchemyWebhookView(APIView):
+    """Accept signed BNB address-activity notifications from Alchemy."""
+
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        from wallet.alchemy import valid_webhook_signature, webhook_configured
+
+        if not webhook_configured():
+            return Response({"detail": "Alchemy webhook is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        raw_body = request._request.body
+        signature = request.headers.get("X-Alchemy-Signature", "")
+        if not valid_webhook_signature(raw_body, signature):
+            return Response({"detail": "Invalid webhook signature."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        payload = request.data if isinstance(request.data, dict) else {}
+        if payload.get("webhookId") != django_settings.ALCHEMY_WEBHOOK_ID:
+            return Response({"detail": "Unknown webhook."}, status=status.HTTP_401_UNAUTHORIZED)
+        if payload.get("type") != "ADDRESS_ACTIVITY":
+            return Response({"status": "OK", "ignored": True})
+
+        activities = (payload.get("event") or {}).get("activity") or []
+        accepted = 0
+        seen_hashes = set()
+        for activity in activities:
+            if not isinstance(activity, dict):
+                continue
+            raw_contract = activity.get("rawContract") or {}
+            contract_address = str(raw_contract.get("address") or "").lower()
+            recipient = str(activity.get("toAddress") or "").lower()
+            transaction_hash = str(activity.get("hash") or "").lower()
+            if (
+                activity.get("category") not in {"token", "erc20"}
+                or contract_address != django_settings.BSC_USDT_CONTRACT_ADDRESS.lower()
+                or transaction_hash in seen_hashes
+            ):
+                continue
+            seen_hashes.add(transaction_hash)
+            try:
+                route = DirectBSCDepositAddress.objects.select_related(
+                    "transaction__wallet__user"
+                ).get(address__iexact=recipient)
+            except DirectBSCDepositAddress.DoesNotExist:
+                continue
+
+            from wallet.deposits import DepositClaimError, verify_and_credit_onchain_deposit
+
+            try:
+                verify_and_credit_onchain_deposit(
+                    transaction_id=route.transaction_id,
+                    user_id=route.transaction.wallet.user_id,
+                    transaction_hash=transaction_hash,
+                )
+                accepted += 1
+            except DepositClaimError as exc:
+                logger.warning("Rejected Alchemy deposit event %s: %s", transaction_hash, exc)
+            except PaymentProviderError as exc:
+                logger.warning("Alchemy deposit verification unavailable for %s: %s", transaction_hash, exc)
+                return Response({"status": "RETRY"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        return Response({"status": "OK", "accepted": accepted})
 
 
 class CancelCryptoPaymentView(APIView):
@@ -171,6 +355,11 @@ class CancelCryptoPaymentView(APIView):
             tx = Transaction.objects.get(id=tx_id, wallet=request.user.wallet, status=Transaction.Status.PENDING)
         except Transaction.DoesNotExist:
             return Response({"detail": "Pending transaction not found."}, status=status.HTTP_404_NOT_FOUND)
+        if OnChainDeposit.objects.filter(transaction=tx).exists():
+            return Response(
+                {"detail": "A blockchain payment has already been detected and is awaiting confirmation."},
+                status=status.HTTP_409_CONFLICT,
+            )
         tx.status = Transaction.Status.FAILED
         tx.description = "Deposit cancelled"
         tx.save(update_fields=["status", "description"])
