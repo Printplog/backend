@@ -33,7 +33,7 @@ from typing import Optional, List
 VALID_TYPES = [
     "text", "textarea", "upload", "file", "sign", "date",
     "gen", "number", "checkbox", "range", "color", "email",
-    "tel", "status", "password", "hide", "hide_checked", "hide_unchecked", "qrcode", "barcode"
+    "tel", "status", "password", "hide", "hide_checked", "hide_unchecked", "qrcode", "barcode", "fixed"
 ]
 # Note: "depends" is NOT in VALID_TYPES — it's an extension, not a field type.
 
@@ -57,23 +57,25 @@ VALID_MODIFIER_PREFIXES = [
 # IMPORTANT: "depends" sets lastPartBase to "depends".
 # After depends, only track_ is allowed (grayscale is inherited from source — track_ checked separately).
 ALLOWED_AFTER = {
-    "mask": ["upload", "file", "editable", "grayscale"],
+    "mask": ["upload", "file", "fixed", "editable", "grayscale"],
     "max":          ["text", "textarea", "gen", "number", "range", "min", "hide", "hide_checked", "hide_unchecked"],
     "min":          ["text", "textarea", "gen", "number", "range", "max", "hide", "hide_checked", "hide_unchecked"],
     "editable":     ["text", "textarea", "gen", "email", "number", "date", "checkbox",
                      "upload", "tel", "password", "range", "color", "file", "status", "sign", "qrcode",
-                     "mask", "select", "depends", "hide", "hide_checked", "hide_unchecked", "qrcode", "barcode"],
+                     "mask", "select", "depends", "hide", "hide_checked", "hide_unchecked", "qrcode", "barcode",
+                     "grayscale"],
     "tracking_id":  ["gen", "max", "min", "text", "number", "hide", "hide_checked", "hide_unchecked"],
     "link":         ["tracking_id"],
     "date_format":  ["date", "hide", "hide_checked", "hide_unchecked"],
     "gen_rule":     ["gen", "hide", "hide_checked", "hide_unchecked"],
     "mode":         ["gen", "qrcode", "barcode", "hide", "hide_checked", "hide_unchecked"],
-    "grayscale":    ["mask", "upload", "file", "depends", "hide", "hide_checked", "hide_unchecked"],
+    "grayscale":    ["mask", "upload", "file", "fixed", "depends", "editable", "hide", "hide_checked", "hide_unchecked"],
     "select":       ["editable"],  # track_ is checked separately
     "showIf":       ["text", "textarea", "gen", "email", "number", "date", "checkbox",
                      "upload", "tel", "password", "range", "color", "file", "status", "sign", "qrcode", "barcode",
                      "hide", "hide_checked", "hide_unchecked",
-                     "editable", "max", "min", "tracking_id", "date_format", "gen_rule", "select"],
+                     "editable", "max", "min", "tracking_id", "date_format", "gen_rule", "select",
+                     "grayscale"],
 }
 
 # ============================================================================

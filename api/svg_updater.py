@@ -357,7 +357,7 @@ def update_svg_from_field_updates(
             tag_name = el.tag.split("}")[-1] if "}" in el.tag else el.tag
             
             is_image_tag = tag_name in {"image", "use"}
-            is_image_field = field_type in {"upload", "file", "sign", "qrcode", "barcode"}
+            is_image_field = field_type in {"upload", "file", "fixed", "sign", "qrcode", "barcode"}
             # Support .depends both as a type and as an extension in the ID for backward compatibility
             is_depends_field = field_type == "depends" or ".depends" in field_id
             
@@ -512,6 +512,10 @@ def update_svg_from_field_updates(
                             el.attrib.pop("transform", None)
                 except (ValueError, TypeError):
                     pass
+
+            # 5. FLIP needs no runtime handling: it is baked into the
+            # template's transform attribute from the Transform panel.
+            pass
 
     # Update stored values to reflect latest state
     for field in form_fields:

@@ -16,7 +16,7 @@ FIELD_TYPES = [
     "text", "textarea", "checkbox", "date", "upload",
     "number", "email", "tel", "gen", "password",
     "range", "color", "file", "status", "sign", "qrcode", "barcode",
-    "hide", "hide_checked", "hide_unchecked"
+    "hide", "hide_checked", "hide_unchecked", "fixed"
 ]
 
 
@@ -581,7 +581,7 @@ def parse_field_from_id(element_id: str, text_content: str = "") -> Optional[Dic
     KNOWN_FIELD_TYPES = {
         "text", "textarea", "select", "checkbox", "date", "upload",
         "file", "sign", "gen", "status", "hide", "number", "range",
-        "color", "email", "tel", "url", "password", "qrcode", "barcode",
+        "color", "email", "tel", "url", "password", "qrcode", "barcode", "fixed",
     }
 
     try:
@@ -706,7 +706,7 @@ def process_element_to_field(element: Element, fields_list: List[Dict[str, Any]]
     extensions = parse_field_extensions(parts)
 
     has_depends = any(p.startswith("depends_") for p in parts[1:])
-    if extensions.get("requires_grayscale") and extensions["field_type"] not in {"upload", "file"} and not has_depends:
+    if extensions.get("requires_grayscale") and extensions["field_type"] not in {"upload", "file", "fixed"} and not has_depends:
         logger.warning(
             "Grayscale extension on non-upload field '%s' (element ID: %s)",
             base_id,

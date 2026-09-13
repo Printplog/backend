@@ -63,8 +63,8 @@ def apply_text_masks(root):
         part = next((p for p in re.split(r'\.(?![^(]*\))', image.get('id', '')) if p.startswith('mask_')), None)
         if not part:
             continue
-        if etree.QName(image).localname != 'image':
-            raise ValueError('Text masks can only be applied to image layers.')
+        if etree.QName(image).localname not in ('image', 'text', 'rect', 'circle', 'ellipse', 'path', 'g', 'use'):
+            raise ValueError('Text masks can only be applied to drawable layers.')
         source_id = part[5:]
         matches = [el for el in layers if el.get('id').split('.')[0] == source_id]
         if len(matches) != 1 or etree.QName(matches[0]).localname != 'text':
