@@ -199,14 +199,16 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
         try:
             # Read from storage
             # Note: For S3/B2, this might stream or download to memory
-            template.svg_file.open()
-            content = template.svg_file.read()
+            with template.svg_file.open('rb') as svg_file:
+                content = svg_file.read()
             response = HttpResponse(content, content_type="image/svg+xml")
             # Force no-cache for admin SVG proxy to avoid Cloudflare/browser staleness
             response["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response["Pragma"] = "no-cache"
             response["Expires"] = "0"
             return response
+        except FileNotFoundError:
+            return Response({"error": "The template SVG file is missing from storage. Restore the file or upload it again."}, status=404)
         except Exception as e:
             return Response({"error": f"Failed to read SVG: {str(e)}"}, status=500)
 

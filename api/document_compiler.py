@@ -72,7 +72,9 @@ def _extract_reference(pattern: str, values: dict) -> str:
     value = values.get(f"dep_{field_name}") if is_dependency else None
     if value is None or value == "":
         value = values.get(field_name, "")
-    text = str(value or "")
+    text = str(value if value is not None else "")
+    if isinstance(value, bool):
+        text = str(value).lower()
     if extract_type == "w":
         try:
             return text.strip().split()[int(extract_pattern) - 1]
@@ -84,6 +86,8 @@ def _extract_reference(pattern: str, values: dict) -> str:
 
 
 def _generate_pattern(content: str, values: dict) -> str:
+    if content.startswith("dep_") and content.endswith("[reverse]"):
+        return _extract_reference(content[:-9], values)[::-1]
     match = re.fullmatch(r"(rn|rc|ru|rl)\[(\d+)\]", content)
     if match:
         kind, raw_count = match.groups()
@@ -260,6 +264,29 @@ def _extract_dependency(depends_on: str, values: dict) -> str:
     return text
 
 
+def _order_generated_fields(fields):
+    by_id = {field.get("id"): field for field in fields}
+    visiting, visited, ordered = set(), set(), []
+
+    def visit(field):
+        field_id = field.get("id")
+        if field_id in visited:
+            return
+        if field_id in visiting:
+            raise ValidationError({"values": f"Circular generation reference: {field_id}"})
+        visiting.add(field_id)
+        for dependency in re.findall(r"\(dep_([^()[\]]+)", field.get("generationRule") or ""):
+            if dependency in by_id:
+                visit(by_id[dependency])
+        visiting.remove(field_id)
+        visited.add(field_id)
+        ordered.append(field)
+
+    for field in fields:
+        visit(field)
+    return ordered
+
+
 def compile_document_fields(template_fields, supplied_values, barcode_images=None):
     if not isinstance(supplied_values, dict):
         raise ValidationError({"values": "An object keyed by template field ID is required."})
@@ -298,7 +325,7 @@ def compile_document_fields(template_fields, supplied_values, barcode_images=Non
             if selected:
                 display_values[field_id] = selected.get("displayText") or selected.get("label") or values[field_id]
 
-    for field in fields:
+    for field in _order_generated_fields(fields):
         field_id = field.get("id")
         field_type = (field.get("type") or "").lower()
         rule = field.get("generationRule") or ""
@@ -310,7 +337,7 @@ def compile_document_fields(template_fields, supplied_values, barcode_images=Non
         )
         if is_generated:
             generated = generate_value(rule, display_values, field.get("max")) if rule else ""
-            if not generated:
+            if not generated and not re.search(r"\(dep_", rule):
                 length = min(int(field.get("max") or 8), 100)
                 generated = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(length))
             generated = _apply_max_generation(generated, field.get("maxGeneration"))
