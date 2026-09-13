@@ -294,6 +294,10 @@ def compile_document_fields(template_fields, supplied_values, barcode_images=Non
         raise ValidationError({"values": "Too many values were supplied."})
     fields = copy.deepcopy(template_fields or [])
     field_map = {field.get("id"): field for field in fields if field.get("id")}
+    for field in fields:
+        source = field.get("maskSource")
+        if source and (source not in field_map or source == field.get("id")):
+            raise ValidationError({"values": {field.get("id"): f'Mask source "{source}" must reference another text layer.'}})
     unknown = set(supplied_values) - set(field_map)
     if unknown:
         raise ValidationError({"values": f"Unknown field IDs: {', '.join(sorted(unknown))}."})

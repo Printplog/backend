@@ -1,3 +1,4 @@
+from .svg_text_masks import apply_text_masks, clear_text_masks
 import re
 import hashlib
 import json
@@ -222,6 +223,8 @@ def update_svg_from_field_updates(
     except Exception:
         # Fallback to original content if parsing fails
         return svg_content, form_fields
+
+    clear_text_masks(root)
 
     # Build namespace map for xlink
     nsmap = {'xlink': 'http://www.w3.org/1999/xlink'}
@@ -515,6 +518,8 @@ def update_svg_from_field_updates(
         field_id = field.get("id")
         if field_id in computed_values:
             field["currentValue"] = computed_values[field_id]
+
+    apply_text_masks(root)
 
     # Convert back to string (lxml is faster at serialization too)
     result = (etree.tostring(root, encoding='unicode', pretty_print=False), form_fields)

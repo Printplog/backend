@@ -132,6 +132,7 @@ class CPayProviderResponseTests(SimpleTestCase):
 
 
 @override_settings(
+    PAYMENT_GATEWAY_PROVIDER="cpay",
     CPAY_DEPOSIT_ROUTING_ENABLED=True,
     CPAY_PUBLIC_KEY="public",
     CPAY_PRIVATE_KEY="private",
@@ -404,6 +405,7 @@ class CPayDepositRoutingTests(TestCase):
 
 
 @override_settings(
+    PAYMENT_GATEWAY_PROVIDER="cpay",
     CPAY_PUBLIC_KEY="public",
     CPAY_PRIVATE_KEY="private",
     CPAY_BEP20_USDT_CURRENCY_ID="usdt-bsc-id",
@@ -529,6 +531,7 @@ class RevenueDistributionTaskTests(TestCase):
         self.assertEqual(request.call_args.kwargs["json"]["amount"], "3.00")
 
 
+@override_settings(PAYMENT_GATEWAY_PROVIDER="cpay")
 class RevenueDistributionAdminValidationTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_superuser(

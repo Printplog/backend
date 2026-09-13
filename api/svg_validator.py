@@ -46,7 +46,7 @@ FLAG_EXTENSIONS = [
 
 # Modifier prefixes (matched by startswith)
 VALID_MODIFIER_PREFIXES = [
-    "max_", "depends_", "select_", "link_", "date_", "gen_", "qrcode_", "barcode_", "grayscale_", "showIf_", "mode_",
+    "mask_", "max_", "depends_", "select_", "link_", "date_", "gen_", "qrcode_", "barcode_", "grayscale_", "showIf_", "mode_",
 ]
 
 # ============================================================================
@@ -57,17 +57,18 @@ VALID_MODIFIER_PREFIXES = [
 # IMPORTANT: "depends" sets lastPartBase to "depends".
 # After depends, only track_ is allowed (grayscale is inherited from source — track_ checked separately).
 ALLOWED_AFTER = {
+    "mask": ["upload", "file", "editable", "grayscale"],
     "max":          ["text", "textarea", "gen", "number", "range", "min", "hide", "hide_checked", "hide_unchecked"],
     "min":          ["text", "textarea", "gen", "number", "range", "max", "hide", "hide_checked", "hide_unchecked"],
     "editable":     ["text", "textarea", "gen", "email", "number", "date", "checkbox",
                      "upload", "tel", "password", "range", "color", "file", "status", "sign", "qrcode",
-                     "select", "depends", "hide", "hide_checked", "hide_unchecked", "qrcode", "barcode"],
+                     "mask", "select", "depends", "hide", "hide_checked", "hide_unchecked", "qrcode", "barcode"],
     "tracking_id":  ["gen", "max", "min", "text", "number", "hide", "hide_checked", "hide_unchecked"],
     "link":         ["tracking_id"],
     "date_format":  ["date", "hide", "hide_checked", "hide_unchecked"],
     "gen_rule":     ["gen", "hide", "hide_checked", "hide_unchecked"],
     "mode":         ["gen", "qrcode", "barcode", "hide", "hide_checked", "hide_unchecked"],
-    "grayscale":    ["upload", "file", "depends", "hide", "hide_checked", "hide_unchecked"],
+    "grayscale":    ["mask", "upload", "file", "depends", "hide", "hide_checked", "hide_unchecked"],
     "select":       ["editable"],  # track_ is checked separately
     "showIf":       ["text", "textarea", "gen", "email", "number", "date", "checkbox",
                      "upload", "tel", "password", "range", "color", "file", "status", "sign", "qrcode", "barcode",

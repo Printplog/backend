@@ -39,13 +39,15 @@ from .two_factor import (
 User = get_user_model()
 
 
-def _jwt_cookie_settings():
+def _jwt_cookie_settings(*, refresh=False):
     cookie_settings = {
         'httponly': settings.JWT_COOKIE_HTTPONLY,
         'secure': settings.JWT_COOKIE_SECURE,
         'samesite': settings.JWT_COOKIE_SAMESITE,
         'path': settings.JWT_COOKIE_PATH,
-        'max_age': 2 * 24 * 60 * 60,
+        'max_age': int(settings.SIMPLE_JWT[
+            'REFRESH_TOKEN_LIFETIME' if refresh else 'ACCESS_TOKEN_LIFETIME'
+        ].total_seconds()),
     }
     if getattr(settings, 'JWT_COOKIE_DOMAIN', None):
         cookie_settings['domain'] = settings.JWT_COOKIE_DOMAIN
@@ -83,7 +85,7 @@ def _authenticated_response(user, request, *, admin_mfa=False, recovery_codes=No
     response = JsonResponse(payload)
     cookie_settings = _jwt_cookie_settings()
     response.set_cookie('access_token', str(refresh.access_token), **cookie_settings)
-    response.set_cookie('refresh_token', str(refresh), **cookie_settings)
+    response.set_cookie('refresh_token', str(refresh), **_jwt_cookie_settings(refresh=True))
     response['Cache-Control'] = 'no-store'
     if notify:
         _notify_login(user, request)

@@ -199,6 +199,8 @@ def sync_form_fields_with_patches(instance, patches: List[Dict[str, Any]]) -> Tu
             new_field_data = parse_field_from_id(new_id, existing_text)
 
             if new_field_data:
+                # Optional mask metadata must also be cleared when .mask is removed.
+                new_field_data.setdefault('maskSource', None)
                 base_id = new_field_data['id']
                 target_field = fields_by_id.get(base_id)
 

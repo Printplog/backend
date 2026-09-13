@@ -168,7 +168,7 @@ def apply_svg_patches(svg_content, patches):
         )
 
         applied_count = 0
-        matched_elements = set()  # Track which DOM elements have already been claimed by an 'id' patch
+        renamed_elements = {}  # Resolve later edits through every ID used by this layer
 
         for patch in patches_sorted:
             element_id = patch.get('id')
@@ -195,14 +195,14 @@ def apply_svg_patches(svg_content, patches):
                     f".//*[@data-name='{base_id}']"
                 ])
             
-            target_element = None
+            target_element = renamed_elements.get(element_id)
             for query in queries:
+                if target_element is not None:
+                    break
                 try:
                     candidates = svg_tree.xpath(query, namespaces=namespaces)
-                    # Filter out candidates already matched by a previous 'id' patch
-                    unmatched = [c for c in candidates if c not in matched_elements]
-                    if unmatched:
-                        target_element = unmatched[0]
+                    if candidates:
+                        target_element = candidates[0]
                         break
                 except Exception as xpath_err:
                     logger.warning("[SVG-Patcher] XPath query failed, skipping: %s", xpath_err)
@@ -212,7 +212,8 @@ def apply_svg_patches(svg_content, patches):
                 if attribute == 'id':
                     # Special handling for 'id' attribute to ensure uniqueness tracking
                     target_element.set('id', str(value))
-                    matched_elements.add(target_element)
+                    renamed_elements[element_id] = target_element
+                    renamed_elements[str(value)] = target_element
                 else:
                     # For other attributes, use the general setter
                     set_element_attribute(target_element, attribute, value, namespaces, svg_tree)
@@ -235,8 +236,13 @@ def merge_svg_patches(patches):
     """
     merged = {}
     reorder_patches = []
+    aliases = {}
     
     for patch in patches:
+        layer_id = aliases.get(patch.get("id"), patch.get("id"))
+        patch = {**patch, "id": layer_id}
+        if patch.get("attribute") == "id" and isinstance(patch.get("value"), str):
+            aliases[patch["value"]] = layer_id
         if patch.get('attribute') == 'reorder':
             reorder_patches.append(patch)
             continue

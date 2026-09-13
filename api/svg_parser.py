@@ -352,6 +352,7 @@ def parse_field_extensions(parts: List[str]) -> Dict[str, Any]:
         "field_type": parts[0],  # Default to base_id
         "max_value": None,
         "dependency": None,
+        "mask_source": None,
         "tracking_role": None,
         "date_format": None,
         "generation_rule": None,
@@ -377,6 +378,9 @@ def parse_field_extensions(parts: List[str]) -> Dict[str, Any]:
                 except ValueError:
                     pass
         
+        elif part.startswith("mask_"):
+            result["mask_source"] = part[5:]
+
         elif part.startswith("depends_"):
             # Extract dependency with optional extraction pattern
             # e.g., "field_name[w1]" or "field_name[ch1-4]"
@@ -514,6 +518,9 @@ def create_regular_field(base_id: str, element_id: str, extensions: Dict[str, An
     if extensions["max_value"] is not None:
         field["max"] = extensions["max_value"]
     
+    if extensions["mask_source"]:
+        field["maskSource"] = extensions["mask_source"]
+
     if extensions["dependency"]:
         field["dependsOn"] = extensions["dependency"]
     
