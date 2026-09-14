@@ -86,8 +86,6 @@ def _extract_reference(pattern: str, values: dict) -> str:
 
 
 def _generate_pattern(content: str, values: dict) -> str:
-    if content.startswith("dep_") and content.endswith("[reverse]"):
-        return _extract_reference(content[:-9], values)[::-1]
     match = re.fullmatch(r"(rn|rc|ru|rl)\[(\d+)\]", content)
     if match:
         kind, raw_count = match.groups()

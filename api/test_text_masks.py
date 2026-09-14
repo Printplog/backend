@@ -51,11 +51,11 @@ class TextMaskTests(SimpleTestCase):
         self.assertFalse(root.xpath('.//*[@data-st-mask-source-style]'))
 
     def test_generated_text_masks(self):
-        svg=SVG.replace('Title.text','Title.gen_AUTO:(dep_Message[reverse])').replace('</svg>','<text id="Message.text">LOVE</text></svg>')
+        svg=SVG.replace('Title.text','Title.gen_AUTO:(dep_Message[w1])').replace('</svg>','<text id="Message.text">LOVE YOU</text></svg>')
         fields,_=compile_document_fields(parse_svg_to_form_fields(svg),{})
         output,_=update_svg_from_field_updates(svg,fields,[{'id':f['id'],'value':f['currentValue']} for f in fields])
         root=etree.fromstring(output.encode())
-        self.assertEqual(root.xpath('string(.//s:mask//s:text)',namespaces=NS),'EVOL')
+        self.assertEqual(root.xpath('string(.//s:mask//s:text)',namespaces=NS),'LOVE')
 
     def test_invalid_source(self):
         for source in ('Missing','Photo'):
