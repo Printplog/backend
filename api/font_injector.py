@@ -14,7 +14,7 @@ from .models import Font
 # Pre-compile regex patterns for better performance
 DEFS_PATTERN = re.compile(r'(<defs[^>]*>)(.*?)(</defs>)', re.IGNORECASE | re.DOTALL)
 FONT_FAMILY_CSS_PATTERN = re.compile(r'font-family\s*:\s*([^;,\n]+)', re.IGNORECASE)
-STYLE_ATTR_PATTERN = re.compile(r'style\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+STYLE_ATTR_PATTERN = re.compile(r'style\s*=\s*(["\'])(.*?)\1', re.IGNORECASE | re.DOTALL)
 FONT_FAMILY_ATTR_PATTERN = re.compile(r'font-family\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
 STYLE_BLOCK_PATTERN = re.compile(r'<style[^>]*>(.*?)</style>', re.DOTALL | re.IGNORECASE)
 SVG_PATTERN = re.compile(r'(<svg[^>]*>)', re.IGNORECASE)
@@ -80,8 +80,10 @@ def _extract_font_aliases(svg_content: str) -> dict:
         for match in FONT_FAMILY_CSS_PATTERN.findall(style_block):
             add_alias(match)
     
-    # Extract from style attributes (inline styles) - using pre-compiled pattern
-    for style_attr in STYLE_ATTR_PATTERN.findall(svg_content):
+    # Extract from style attributes (inline styles) - using pre-compiled pattern.
+    # The backreference keeps quoted family names intact
+    # (e.g. style="font-family: 'Arial Black';").
+    for _quote, style_attr in STYLE_ATTR_PATTERN.findall(svg_content):
         for match in FONT_FAMILY_CSS_PATTERN.findall(style_attr):
             add_alias(match)
     
@@ -179,12 +181,26 @@ def inject_fonts_into_svg(svg_content: str, fonts: List[Font], base_url: Optiona
         if not font_url:
             continue
         
-        # If we have a clean family name, use it. 
+        weight = getattr(font, 'weight', 'normal') or 'normal'
+        style = getattr(font, 'style', 'normal') or 'normal'
+
+        # A template can reference the full face name ("Arial Black") while the
+        # record only carries the bare family ("Arial"). Emitting every such
+        # record under the bare family collapses all faces onto one @font-face
+        # descriptor, so a single file wins for every text. Emit under the exact
+        # face name the SVG uses when it uses it, and keep the family emission
+        # only when it does not collide with another file (first file wins).
+        emit_families = []
+        name_key = re.sub(r'[^a-z0-9]', '', (getattr(font, 'name', None) or '').lower())
+        if name_key and name_key in alias_map:
+            emit_families.append(alias_map[name_key])
+
+        # If we have a clean family name, use it.
         # Otherwise fallback to matching logic which might grab the full name "Roboto Bold" as family
         if font.family:
-            css_family = font.family
+            family_candidate = font.family
         else:
-            css_family = None
+            family_candidate = None
             # Try to find what SVG uses
             candidates = _get_font_candidates(font)
             # ... existing matching logic ...
@@ -192,20 +208,20 @@ def inject_fonts_into_svg(svg_content: str, fonts: List[Font], base_url: Optiona
             for candidate in candidates:
                 key = re.sub(r'[^a-z0-9]', '', candidate.lower()) # simple key for matching name only
                 if key and key in alias_map:
-                    css_family = alias_map[key]
+                    family_candidate = alias_map[key]
                     break
-            
-            if not css_family:
-                # If no family set and no match, default to name
-                css_family = font.name
 
-        weight = getattr(font, 'weight', 'normal')
-        style = getattr(font, 'style', 'normal')
-        
-        # Generate unique key for this specific variant
-        variant_key = _normalize_font_key(css_family, weight, style)
-        
-        font_faces.append((variant_key, css_family, _build_font_face(css_family, font_url, font_format, weight, style)))
+            if not family_candidate:
+                # If no family set and no match, default to name
+                family_candidate = font.name
+        if family_candidate and family_candidate not in emit_families:
+            emit_families.append(family_candidate)
+
+        for css_family in emit_families:
+            # Generate unique key for this specific variant
+            variant_key = _normalize_font_key(css_family, weight, style)
+
+            font_faces.append((variant_key, css_family, _build_font_face(css_family, font_url, font_format, weight, style)))
     
     # Deduplicate font-faces by unique key (family + weight + style)
     # Map: normalized_variant_key -> (css_family, font_face_css)

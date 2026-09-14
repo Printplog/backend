@@ -939,6 +939,20 @@ class ApiPlatformSecurityTests(APITestCase):
         )
         self.assertIn("https://customer.example", metadata)
 
+    def test_render_svg_sanitizer_keeps_embedded_ttf_otf_font_faces(self):
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg"><defs><style type="text/css">'
+            '@font-face { font-family: "Arial"; src: url("data:application/font-truetype;base64,QUJD") format("truetype"); font-weight: normal; font-style: normal; }'
+            '@font-face { font-family: "Arial Black"; src: url("data:application/font-opentype;base64,QUJD") format("opentype"); font-weight: normal; font-style: normal; }'
+            "</style></defs>"
+            '<text style="font-family: Arial;">Hello</text></svg>'
+        )
+        cleaned = sanitize_svg_for_render(svg)
+        self.assertIn('font-family: "Arial";', cleaned)
+        self.assertIn('font-family: "Arial Black";', cleaned)
+        self.assertIn("data:application/font-truetype;base64,QUJD", cleaned)
+        self.assertIn("data:application/font-opentype;base64,QUJD", cleaned)
+
         xxe = """<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
             <svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>"""
         with self.assertRaises(RenderInputError):

@@ -65,6 +65,32 @@ class FontInjectorTests(SimpleTestCase):
         self.assertIn("font-style: italic;", result)
         self.assertIn('url("https://cdn.test/fonts/inter-bold.ttf")', result)
 
+    def test_sibling_faces_sharing_family_and_weight_stay_separate(self):
+        svg = (
+            '<svg>'
+            '<text style="font-family: Arial;">Regular</text>'
+            "<text style=\"font-family: 'Arial Black';\">Black</text>"
+            "<text style=\"font-family: 'Arial Bold';\">Bold</text>"
+            "</svg>"
+        )
+        result = inject_fonts_into_svg(
+            svg,
+            [
+                make_font("arial", "Arial", "Arial", "normal", "normal", "/fonts/arial.ttf"),
+                make_font("arial-black", "Arial Black", "Arial", "normal", "normal", "/fonts/arial-black.ttf"),
+                make_font("arial-bold", "Arial Bold", "Arial", "normal", "normal", "/fonts/arial-bold.ttf"),
+            ],
+            base_url="https://cdn.test",
+            embed_base64=False,
+        )
+
+        self.assertIn('font-family: "Arial";', result)
+        self.assertIn('font-family: "Arial Black";', result)
+        self.assertIn('font-family: "Arial Bold";', result)
+        self.assertIn('url("https://cdn.test/fonts/arial.ttf")', result)
+        self.assertIn('url("https://cdn.test/fonts/arial-black.ttf")', result)
+        self.assertIn('url("https://cdn.test/fonts/arial-bold.ttf")', result)
+
     def test_font_without_family_falls_back_to_name_without_crashing(self):
         svg = "<svg><text>Hello</text></svg>"
         result = inject_fonts_into_svg(

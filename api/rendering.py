@@ -22,7 +22,7 @@ _BLOCKED_ELEMENTS = frozenset({
     "animate", "animatemotion", "animatetransform", "set", "discard", "mpath", "link",
 })
 _SAFE_DATA_RESOURCE = re.compile(
-    r"^data:(?:image/(?:png|jpeg|jpg|webp)|font/[a-z0-9.+-]+|application/(?:font-woff|font-woff2));base64,[a-z0-9+/]+={0,2}\Z",
+    r"^data:(?:image/(?:png|jpeg|jpg|webp)|font/[a-z0-9.+-]+|application/font-[a-z0-9.+-]+);base64,[a-z0-9+/]+={0,2}\Z",
     re.I,
 )
 _LEGACY_SAFE_RASTER = re.compile(
