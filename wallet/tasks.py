@@ -389,32 +389,70 @@ def execute_revenue_distribution(self, batch_id: str):
 )
 def reconcile_revenue_distributions(self):
     provider = get_payout_provider()
-    submitted = RevenueDistributionPayout.objects.filter(
-        status=RevenueDistributionPayout.Status.SUBMITTED,
-        provider_transaction_id__gt="",
-    ).select_related("batch")
+    payout_targets = list(
+        RevenueDistributionPayout.objects.filter(
+            status=RevenueDistributionPayout.Status.SUBMITTED,
+            provider_transaction_id__gt="",
+        ).values_list("id", "batch_id")
+    )
+    checked = len(payout_targets)
     touched_batches = set()
-    for payout in submitted.iterator():
-        provider_status = provider.get_transfer_status(payout.provider_transaction_id)
-        touched_batches.add(payout.batch_id)
-        if provider_status.status == "completed":
-            payout.status = RevenueDistributionPayout.Status.COMPLETED
-            payout.transaction_hash = provider_status.transaction_hash
-            payout.completed_at = timezone.now()
-            payout.error_message = ""
-            payout.save(update_fields=[
-                "status", "transaction_hash", "completed_at", "error_message", "updated_at",
-            ])
-            _queue_payout_email(payout)
-        elif provider_status.status == "failed":
-            payout.status = RevenueDistributionPayout.Status.FAILED
-            payout.transaction_hash = provider_status.transaction_hash
-            payout.error_message = f"{gateway_label()} reported a failed transfer."
-            payout.save(update_fields=["status", "transaction_hash", "error_message", "updated_at"])
+    try:
+        for payout_id, batch_id in payout_targets:
+            touched_batches.add(batch_id)
+            try:
+                payout = RevenueDistributionPayout.objects.get(pk=payout_id)
+            except RevenueDistributionPayout.DoesNotExist:
+                continue
+            if payout.status != RevenueDistributionPayout.Status.SUBMITTED:
+                continue
+            provider_status = provider.get_transfer_status(payout.provider_transaction_id)
+            if provider_status.status == "completed":
+                payout.status = RevenueDistributionPayout.Status.COMPLETED
+                payout.transaction_hash = provider_status.transaction_hash
+                payout.completed_at = timezone.now()
+                payout.error_message = ""
+                payout.save(update_fields=[
+                    "status", "transaction_hash", "completed_at", "error_message", "updated_at",
+                ])
+                try:
+                    _queue_payout_email(payout)
+                except Exception:
+                    logger.warning("Revenue payout email failed for %s", payout_id, exc_info=True)
+            elif provider_status.status == "failed":
+                payout.status = RevenueDistributionPayout.Status.FAILED
+                payout.transaction_hash = provider_status.transaction_hash
+                payout.error_message = f"{gateway_label()} reported a failed transfer."
+                payout.save(update_fields=["status", "transaction_hash", "error_message", "updated_at"])
+    finally:
+        for batch_id in touched_batches:
+            try:
+                _refresh_batch_status(batch_id)
+            except Exception:
+                logger.warning("Revenue batch refresh failed for %s", batch_id, exc_info=True)
+        _repair_stuck_submitted_batches()
+    return {"checked": checked, "batches": len(touched_batches)}
 
-    for batch_id in touched_batches:
-        _refresh_batch_status(batch_id)
-    return {"checked": submitted.count(), "batches": len(touched_batches)}
+
+def _repair_stuck_submitted_batches():
+    stuck_ids = list(
+        RevenueDistributionBatch.objects.filter(
+            status=RevenueDistributionBatch.Status.SUBMITTED
+        ).values_list("id", flat=True)[:50]
+    )
+    for batch_id in stuck_ids:
+        try:
+            statuses = list(
+                RevenueDistributionPayout.objects.filter(batch_id=batch_id).values_list(
+                    "status", flat=True
+                )
+            )
+            if statuses and all(
+                status == RevenueDistributionPayout.Status.COMPLETED for status in statuses
+            ):
+                _refresh_batch_status(batch_id)
+        except Exception:
+            logger.warning("Revenue stuck-batch repair failed for %s", batch_id, exc_info=True)
 
 
 def _refresh_batch_status(batch_id):
