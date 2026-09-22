@@ -12,7 +12,11 @@ class ApiDocsRoutingTests(SimpleTestCase):
             fetch_redirect_response=False,
         )
 
-    def test_openapi_schema_is_not_publicly_exposed(self):
+    def test_openapi_schema_exposes_only_the_supported_v1_contract(self):
         response = self.client.get("/api/v1/schema")
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
+        contract = response.content.decode("utf-8")
+        self.assertIn("/templates", contract)
+        self.assertIn("/documents", contract)
+        self.assertNotIn("/admin/", contract)

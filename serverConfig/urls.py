@@ -17,11 +17,13 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
+from drf_spectacular.views import SpectacularAPIView
 
 from analytics.views import LogVisitView
 from serverConfig.views import api_docs_redirect
 
 urlpatterns = [
+    path('api/v1/schema', SpectacularAPIView.as_view(), name='v1-api-schema'),
     path('api/v1/docs', api_docs_redirect, name='v1-api-docs'),
     path('admin/', admin.site.urls),
     path('api/accounts/',include("accounts.urls")),

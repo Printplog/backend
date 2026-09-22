@@ -630,7 +630,12 @@ CSRF_TRUSTED_ORIGINS = env_list(
 # every other deployed env authenticate real users and must use the list above.
 CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", ENV == "development")
 
-CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
+CORS_EXPOSE_HEADERS = [
+    'Content-Type',
+    'Content-Disposition',
+    'Content-Length',
+    'X-CSRFToken',
+]
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 CORS_ALLOW_HEADERS = (*default_headers, 'x-embed-origin', 'idempotency-key')
 

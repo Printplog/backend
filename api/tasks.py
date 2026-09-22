@@ -9,10 +9,30 @@ from django.utils import timezone
 
 from .models import DocumentRenderJob
 from .render_events import broadcast_render_job
-from .rendering import assemble_document_svg, render_svg_with_chromium, verify_render_output
+from .rendering import RenderInputError, assemble_document_svg, render_svg_with_chromium, verify_render_output
 
 
 logger = logging.getLogger(__name__)
+
+
+def _render_error_code(exc: Exception, stage: str) -> str:
+    """Map internal failures to stable, non-sensitive customer error codes."""
+    if isinstance(exc, SoftTimeLimitExceeded):
+        return "render_timeout"
+    if isinstance(exc, RenderInputError) and stage == "verify":
+        return "render_invalid_output"
+    if isinstance(exc, RenderInputError):
+        return "render_invalid_input"
+    if stage == "source":
+        if isinstance(exc, FileNotFoundError):
+            return "render_source_missing"
+        if isinstance(exc, PermissionError):
+            return "render_source_unreadable"
+    if stage == "renderer":
+        return "renderer_unavailable"
+    if stage == "storage":
+        return "render_storage_failed"
+    return "render_failed"
 
 
 @shared_task(
@@ -25,6 +45,7 @@ logger = logging.getLogger(__name__)
 )
 def render_document(self, job_id: str) -> None:
     close_old_connections()
+    stage = "claim"
     try:
         with transaction.atomic():
             job = DocumentRenderJob.objects.select_for_update().get(pk=job_id)
@@ -42,13 +63,17 @@ def render_document(self, job_id: str) -> None:
             job.save(update_fields=["status", "error_code", "started_at", "updated_at"])
         broadcast_render_job(job_id)
 
+        stage = "source"
         job = DocumentRenderJob.objects.select_related("document", "document__template").prefetch_related(
             "document__fonts", "document__template__fonts"
         ).get(pk=job_id)
         svg = assemble_document_svg(job.document)
+        stage = "renderer"
         payload = render_svg_with_chromium(svg, job.format)
+        stage = "verify"
         verify_render_output(payload, job.format)
         filename = f"{job.id}.{job.format}"
+        stage = "storage"
         job.output_file.save(filename, ContentFile(payload), save=False)
         try:
             job.output_size = len(payload)
@@ -65,8 +90,8 @@ def render_document(self, job_id: str) -> None:
     except Retry:
         raise
     except Exception as exc:
-        error_code = "render_timeout" if isinstance(exc, SoftTimeLimitExceeded) else "render_failed"
-        logger.exception("Document render job %s failed with %s", job_id, error_code)
+        error_code = _render_error_code(exc, stage)
+        logger.exception("Document render job %s failed at %s with %s", job_id, stage, error_code)
         DocumentRenderJob.objects.filter(pk=job_id).update(
             status=DocumentRenderJob.Status.FAILED,
             error_code=error_code,

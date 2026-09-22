@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import re
 import time
 import uuid
@@ -14,6 +15,7 @@ from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.cache import patch_vary_headers
 from rest_framework import status
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
 from rest_framework.pagination import CursorPagination
@@ -75,6 +77,7 @@ from wallet.models import Wallet
 
 
 RENDER_DOWNLOAD_TTL_SECONDS = 300
+logger = logging.getLogger(__name__)
 
 
 def _api_price(template, discount_percentage=None):
@@ -492,6 +495,50 @@ def _serialize_render_job(request, job):
     }
 
 
+def _download_cors_origin(request, job):
+    """Return a normalized, configured customer origin for signed downloads."""
+    raw_origin = request.headers.get("Origin", "")
+    if not raw_origin or not job.requested_by_key_id:
+        return None
+    try:
+        origin = normalize_origin(raw_origin)
+    except ValueError:
+        return None
+    customer_settings = ApiCustomerSettings.objects.filter(user_id=job.user_id).first()
+    allowed_origins = job.requested_by_key.allowed_origins or (
+        customer_settings.allowed_origins if customer_settings else []
+    )
+    return origin if origin in allowed_origins else None
+
+
+def _prepare_download_response(response, request, job):
+    """Apply private-download and narrowly scoped browser access headers."""
+    response["Cache-Control"] = "private, no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    patch_vary_headers(response, ("Origin",))
+    allowed_origin = _download_cors_origin(request, job)
+    if allowed_origin:
+        response["Access-Control-Allow-Origin"] = allowed_origin
+        response["Access-Control-Expose-Headers"] = (
+            "Content-Disposition, Content-Length, Content-Type"
+        )
+        response["Cross-Origin-Resource-Policy"] = "cross-origin"
+    return response
+
+
+def _missing_storage_error(exc):
+    if isinstance(exc, FileNotFoundError):
+        return True
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    error = response.get("Error") or {}
+    metadata = response.get("ResponseMetadata") or {}
+    return str(error.get("Code", "")) in {"404", "NoSuchKey", "NotFound"} or (
+        metadata.get("HTTPStatusCode") == 404
+    )
+
+
 class V1DocumentRenderCreateView(V1ApiView):
     @transaction.atomic
     @extend_schema(
@@ -651,19 +698,49 @@ class PublicRenderDownloadView(APIView):
         ):
             raise PermissionDenied("This render is no longer available.")
         if job.expires_at <= timezone.now():
-            return Response({"detail": "This render expired."}, status=410)
+            return _prepare_download_response(
+                Response({"detail": "This render expired.", "code": "render_expired"}, status=410),
+                request,
+                job,
+            )
         content_type = "image/png" if job.format == DocumentRenderJob.Format.PNG else "application/pdf"
+        try:
+            output = job.output_file.open("rb")
+        except Exception as exc:
+            if _missing_storage_error(exc):
+                logger.error("Render artifact %s is missing from storage", job.id)
+                return _prepare_download_response(
+                    Response(
+                        {
+                            "detail": "This render artifact is no longer available. Create a new render.",
+                            "code": "render_artifact_missing",
+                        },
+                        status=410,
+                    ),
+                    request,
+                    job,
+                )
+            logger.exception("Could not open render artifact %s", job.id)
+            return _prepare_download_response(
+                Response(
+                    {
+                        "detail": "Render storage is temporarily unavailable.",
+                        "code": "render_storage_unavailable",
+                    },
+                    status=503,
+                ),
+                request,
+                job,
+            )
         response = FileResponse(
-            job.output_file.open("rb"),
+            output,
             as_attachment=True,
             filename=f"sharptoolz-{job.document_id}.{job.format}",
             content_type=content_type,
         )
-        response["Cache-Control"] = "private, no-store"
-        response["X-Content-Type-Options"] = "nosniff"
         if job.output_size:
             response["Content-Length"] = str(job.output_size)
-        return response
+        return _prepare_download_response(response, request, job)
 
 
 def _validate_session_payload(data, api_key, user):

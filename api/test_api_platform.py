@@ -187,12 +187,22 @@ class ApiPlatformSecurityTests(APITestCase):
     def test_admin_api_customer_dashboard_attributes_external_users_and_activity(self):
         token, key = self.issue_key()
         self.create_embed_session(token, external_user_id="partner-user-42")
-        PurchasedTemplate.objects.create(
+        document = PurchasedTemplate.objects.create(
             buyer=self.customer,
             template=self.template,
             external_user_id="partner-user-42",
             name="Partner document",
             test=True,
+        )
+        failed_render = DocumentRenderJob.objects.create(
+            user=self.customer,
+            document=document,
+            requested_by_key=key,
+            format=DocumentRenderJob.Format.PDF,
+            status=DocumentRenderJob.Status.FAILED,
+            error_code="renderer_unavailable",
+            expires_at=timezone.now() + timedelta(hours=1),
+            completed_at=timezone.now(),
         )
         admin = User.objects.create_superuser("admin-api", "admin-api@example.com", "password")
         ApiEntitlement.objects.create(user=admin)
@@ -223,6 +233,12 @@ class ApiPlatformSecurityTests(APITestCase):
         )
         self.assertEqual(details_response.data["external_users"][0]["requests"], 1)
         self.assertEqual(len(details_response.data["recent_activity"]), 1)
+        self.assertEqual(len(details_response.data["recent_renders"]), 1)
+        self.assertEqual(details_response.data["recent_renders"][0]["id"], str(failed_render.id))
+        self.assertEqual(
+            details_response.data["recent_renders"][0]["error_code"],
+            "renderer_unavailable",
+        )
 
         internal_details = self.client.get(f"/api/admin/api-customers/{admin.id}/")
         self.assertEqual(internal_details.status_code, status.HTTP_404_NOT_FOUND)
@@ -858,6 +874,7 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertEqual(EmbedSession.objects.count(), 1)
 
     @override_settings(
+        CORS_ALLOW_ALL_ORIGINS=False,
         STORAGES={
             "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
             "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
@@ -895,6 +912,24 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertEqual(b"".join(downloaded.streaming_content), b"%PDF-1.7\n%%EOF")
         self.assertEqual(downloaded["Cache-Control"], "private, no-store")
 
+        browser_download = self.client.get(
+            f"{signed.path}?{signed.query}",
+            HTTP_ORIGIN="https://customer.example",
+        )
+        self.assertEqual(browser_download.status_code, status.HTTP_200_OK)
+        self.assertEqual(browser_download["Access-Control-Allow-Origin"], "https://customer.example")
+        self.assertIn("Content-Disposition", browser_download["Access-Control-Expose-Headers"])
+        self.assertIn("Origin", browser_download["Vary"])
+        b"".join(browser_download.streaming_content)
+
+        blocked_origin = self.client.get(
+            f"{signed.path}?{signed.query}",
+            HTTP_ORIGIN="https://attacker.example",
+        )
+        self.assertEqual(blocked_origin.status_code, status.HTTP_200_OK)
+        self.assertNotIn("Access-Control-Allow-Origin", blocked_origin)
+        b"".join(blocked_origin.streaming_content)
+
         tampered = self.client.get(f"{signed.path}?{signed.query}x")
         self.assertEqual(tampered.status_code, status.HTTP_403_FORBIDDEN)
         different_job_id = DocumentRenderJob.objects.create(
@@ -910,6 +945,45 @@ class ApiPlatformSecurityTests(APITestCase):
         key.save(update_fields=["revoked_at"])
         revoked = self.client.get(f"{signed.path}?{signed.query}")
         self.assertEqual(revoked.status_code, status.HTTP_403_FORBIDDEN)
+
+    @override_settings(
+        CORS_ALLOW_ALL_ORIGINS=False,
+        STORAGES={
+            "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+            "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+        }
+    )
+    def test_missing_render_artifact_returns_a_stable_gone_response(self):
+        token, key = self.issue_key()
+        document = PurchasedTemplate.objects.create(
+            buyer=self.customer,
+            template=self.template,
+            external_user_id="42",
+            form_fields=self.template.form_fields,
+        )
+        job = DocumentRenderJob.objects.create(
+            user=self.customer,
+            document=document,
+            requested_by_key=key,
+            format=DocumentRenderJob.Format.PDF,
+            status=DocumentRenderJob.Status.COMPLETED,
+            output_file="api/renders/missing.pdf",
+            expires_at=timezone.now() + timedelta(hours=1),
+            completed_at=timezone.now(),
+        )
+        self.api_credentials(token)
+        polled = self.client.get(f"/api/v1/renders/{job.id}")
+        signed = urlsplit(polled.data["download_url"])
+
+        self.client.credentials()
+        missing = self.client.get(
+            f"{signed.path}?{signed.query}",
+            HTTP_ORIGIN="https://customer.example",
+        )
+
+        self.assertEqual(missing.status_code, status.HTTP_410_GONE)
+        self.assertEqual(missing.data["code"], "render_artifact_missing")
+        self.assertEqual(missing["Access-Control-Allow-Origin"], "https://customer.example")
 
     def test_render_svg_sanitizer_blocks_active_content_and_resource_fetches(self):
         attack = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"
@@ -995,3 +1069,31 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertTrue(job.output_file.name.endswith(".pdf"))
         self.assertEqual(broadcast.call_count, 2)
         broadcast.assert_called_with(str(job.id))
+
+    def test_render_task_returns_stable_invalid_input_error_code(self):
+        from api.tasks import render_document
+
+        _, key = self.issue_key()
+        document = PurchasedTemplate.objects.create(
+            buyer=self.customer,
+            template=self.template,
+            external_user_id="42",
+            form_fields=[],
+        )
+        job = DocumentRenderJob.objects.create(
+            user=self.customer,
+            document=document,
+            requested_by_key=key,
+            format=DocumentRenderJob.Format.PDF,
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        with (
+            patch("api.tasks.assemble_document_svg", side_effect=RenderInputError("unsafe details")),
+            patch("api.tasks.broadcast_render_job"),
+        ):
+            render_document.run(str(job.id))
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, DocumentRenderJob.Status.FAILED)
+        self.assertEqual(job.error_code, "render_invalid_input")
+        self.assertNotIn("unsafe details", job.error_code)

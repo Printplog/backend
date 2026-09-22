@@ -64,6 +64,60 @@ class SharpToolzClientTests(unittest.TestCase):
             ("GET", "/api/v1/renders/job-1"),
         ])
 
+    def test_download_uses_a_fresh_url_without_sending_the_api_key(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            if request.url.host == "signed.example":
+                return httpx.Response(200, content=b"%PDF-1.7\n%%EOF")
+            return httpx.Response(200, json={
+                "id": "job-1",
+                "document_id": "document-1",
+                "format": "pdf",
+                "status": "completed",
+                "download_url": "https://signed.example/file",
+            })
+
+        with SharpToolz(
+            api_key="stz_live_test.key",
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            payload = client.renders.download({"id": "job-1", "status": "completed"})
+
+        self.assertEqual(payload, b"%PDF-1.7\n%%EOF")
+        self.assertEqual(calls[0].url.path, "/api/v1/renders/job-1")
+        self.assertEqual(calls[1].url, httpx.URL("https://signed.example/file"))
+        self.assertNotIn("Authorization", calls[1].headers)
+
+    def test_download_refreshes_an_expired_signed_url_once(self):
+        job_reads = 0
+
+        def handler(request):
+            nonlocal job_reads
+            if request.url.path == "/api/v1/renders/job-1":
+                job_reads += 1
+                suffix = "stale" if job_reads == 1 else "fresh"
+                return httpx.Response(200, json={
+                    "id": "job-1",
+                    "document_id": "document-1",
+                    "format": "pdf",
+                    "status": "completed",
+                    "download_url": f"https://signed.example/{suffix}",
+                })
+            if request.url.path == "/stale":
+                return httpx.Response(403, json={"detail": "expired"})
+            return httpx.Response(200, content=b"fresh")
+
+        with SharpToolz(
+            api_key="stz_live_test.key",
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            payload = client.renders.download("job-1")
+
+        self.assertEqual(payload, b"fresh")
+        self.assertEqual(job_reads, 2)
+
     def test_creation_and_editing_are_hosted_session_only(self):
         calls = []
 

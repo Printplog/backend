@@ -46,6 +46,14 @@ The OpenAPI contract is served at `/api/v1/schema` and interactive docs at
 `/api/v1/docs`. The hosted UI loader is served by the frontend at
 `https://sharptoolz.com/embed/v1.js`.
 
+Rendering is asynchronous. A completed job contains a signed `download_url`
+that lasts five minutes; retrieve `GET /api/v1/renders/{id}` to mint a fresh
+URL. Artifacts are retained for `API_RENDER_RETENTION_HOURS` (24 hours by
+default). Stable render errors are `queue_unavailable`, `render_timeout`,
+`render_invalid_input`, `render_invalid_output`, `render_source_missing`,
+`render_source_unreadable`, `renderer_unavailable`, `render_storage_failed`,
+and `render_failed`.
+
 ## Direct BNB Chain payment gateway
 
 The wallet app can receive and distribute USDT directly on BNB Smart Chain.

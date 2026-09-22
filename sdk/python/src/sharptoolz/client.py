@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -135,6 +137,61 @@ class RendersResource:
                 raise
             return self._wait_by_polling(job["id"], timeout=timeout)
 
+    def download(
+        self,
+        job_or_id: dict[str, Any] | str,
+        *,
+        timeout: float = 120,
+        poll_fallback: bool = True,
+    ) -> bytes:
+        job_id = job_or_id if isinstance(job_or_id, str) else job_or_id.get("id")
+        if not job_id:
+            raise TypeError("A render job or job ID is required.")
+
+        # Always retrieve the job first so the API mints a fresh five-minute
+        # download URL instead of trusting a caller-supplied or stale URL.
+        job = self.get(job_id)
+        if job.get("status") not in TERMINAL_RENDER_STATUSES:
+            job = self.wait(job, timeout=timeout, poll_fallback=poll_fallback)
+        job = self._finish(job)
+
+        for attempt in range(2):
+            download_url = job.get("download_url")
+            if not download_url:
+                raise SharpToolzError(
+                    "The completed render did not include a download URL.",
+                    data=job,
+                )
+            response = self._client._download_http.get(download_url)
+            if response.is_success:
+                return response.content
+            if response.status_code == 403 and attempt == 0:
+                response.close()
+                job = self._finish(self.get(job_id))
+                continue
+            try:
+                data = response.json()
+            except ValueError:
+                data = None
+            message = (
+                data.get("detail") if isinstance(data, dict) else None
+            ) or f"SharpToolz download failed with HTTP {response.status_code}."
+            raise SharpToolzError(message, status_code=response.status_code, data=data)
+        raise SharpToolzError("SharpToolz could not refresh the download URL.", data=job)
+
+    def download_to(
+        self,
+        job_or_id: dict[str, Any] | str,
+        destination: str | os.PathLike[str],
+        *,
+        timeout: float = 120,
+        poll_fallback: bool = True,
+    ) -> Path:
+        path = Path(destination)
+        payload = self.download(job_or_id, timeout=timeout, poll_fallback=poll_fallback)
+        path.write_bytes(payload)
+        return path
+
     def _wait_on_websocket(self, url: str, *, timeout: float) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         with self._client._websocket_connect(url, open_timeout=min(10, timeout)) as socket:
@@ -186,8 +243,15 @@ class SharpToolz:
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Accept": "application/json",
-                "User-Agent": "sharptoolz-python/0.2.0",
+                "User-Agent": "sharptoolz-python/0.3.0",
             },
+        )
+        # Signed file downloads deliberately use a separate client without the
+        # API Authorization header.
+        self._download_http = httpx.Client(
+            timeout=timeout,
+            transport=transport,
+            headers={"User-Agent": "sharptoolz-python/0.3.0"},
         )
         self._websocket_connect = websocket_connect
         self.templates = TemplatesResource(self)
@@ -203,6 +267,7 @@ class SharpToolz:
 
     def close(self) -> None:
         self._http.close()
+        self._download_http.close()
 
     def _request(
         self,

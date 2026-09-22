@@ -388,6 +388,25 @@ class AdminApiCustomerStatusView(APIView):
             }
             for event in usage.select_related("api_key")[:50]
         ]
+        recent_renders = [
+            {
+                **row,
+                "id": str(row["id"]),
+                "document_id": str(row["document_id"]),
+            }
+            for row in renders.order_by("-created_at").values(
+                "id",
+                "document_id",
+                "format",
+                "status",
+                "output_size",
+                "error_code",
+                "expires_at",
+                "created_at",
+                "started_at",
+                "completed_at",
+            )[:50]
+        ]
 
         payload = {
             "range_days": days,
@@ -430,6 +449,7 @@ class AdminApiCustomerStatusView(APIView):
             ).order_by("-requests")[:10]),
             "external_users": sorted(external_users.values(), key=lambda item: item["last_seen_at"], reverse=True)[:100],
             "recent_activity": recent_activity,
+            "recent_renders": recent_renders,
         }
         return _no_cache(Response(payload))
 

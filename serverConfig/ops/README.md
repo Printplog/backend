@@ -65,6 +65,24 @@ TRUSTED_PROXY_HOPS=1
 SENTRY_DSN=…
 ```
 
+The web and worker services must also use the same private render storage. Set
+the following identically on at least `sharptoolz-web` and
+`sharptoolz-celery` (and on other services that read media):
+
+```text
+AWS_STORAGE_BUCKET_NAME=…
+AWS_ACCESS_KEY_ID=…
+AWS_SECRET_ACCESS_KEY=…
+AWS_S3_ENDPOINT_URL=…
+AWS_S3_REGION_NAME=…
+AWS_S3_CUSTOM_DOMAIN=…
+```
+
+If object storage is intentionally disabled, mount the same `/app/media`
+volume into web and worker and ensure uid/gid `10001` can write it. A database
+job marked `completed` is not sufficient: the web container must be able to
+open the artifact written by the worker.
+
 ### Additional per-service tuning
 
 | Service | Variable | Suggested | Why |

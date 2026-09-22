@@ -161,12 +161,24 @@ class V1RenderJobSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     document_id = serializers.UUIDField()
     format = serializers.ChoiceField(choices=["png", "pdf"])
-    status = serializers.ChoiceField(choices=["queued", "running", "completed", "failed"])
+    status = serializers.ChoiceField(
+        choices=["queued", "running", "completed", "failed"],
+        help_text="Wait while queued/running; download only after completed; inspect error_code after failed.",
+    )
     output_size = serializers.IntegerField()
-    error_code = serializers.CharField(allow_blank=True)
-    download_url = serializers.URLField(allow_null=True)
-    download_url_expires_in = serializers.IntegerField(allow_null=True)
-    expires_at = serializers.DateTimeField()
+    error_code = serializers.CharField(
+        allow_blank=True,
+        help_text="Stable non-sensitive failure code; blank unless status is failed.",
+    )
+    download_url = serializers.URLField(
+        allow_null=True,
+        help_text="Signed file URL available only after completion. Retrieve the job again to refresh it.",
+    )
+    download_url_expires_in = serializers.IntegerField(
+        allow_null=True,
+        help_text="Seconds until download_url expires; currently 300 when a URL is present.",
+    )
+    expires_at = serializers.DateTimeField(help_text="When the stored render artifact is deleted.")
     created_at = serializers.DateTimeField()
     started_at = serializers.DateTimeField(allow_null=True)
     completed_at = serializers.DateTimeField(allow_null=True)
