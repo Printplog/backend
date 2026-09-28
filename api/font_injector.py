@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import hashlib
+import json
 from typing import List, Optional, Tuple
 from django.conf import settings
 from django.core.cache import cache
@@ -40,7 +41,53 @@ def _normalize_font_key(name: Optional[str], weight: str = "normal", style: str 
         return ""
     base_key = re.sub(r'[^a-z0-9]', '', name.lower())
     # Create unique key for family + weight + style combination
-    return f"{base_key}_{weight}_{style}"
+    return f"{base_key}_{_normalize_weight(weight)}_{_normalize_style(style)}"
+
+
+def _normalize_weight(weight: Optional[str]) -> str:
+    value = (weight or "normal").strip().lower()
+    compact = re.sub(r"[\s_-]+", "", value)
+    named_weights = {
+        "normal": "400", "regular": "400", "thin": "100", "hairline": "100",
+        "extralight": "200", "ultralight": "200", "light": "300", "book": "400",
+        "medium": "500", "semibold": "600", "demibold": "600", "bold": "700",
+        "extrabold": "800", "ultrabold": "800", "black": "900", "heavy": "900",
+    }
+    if compact in named_weights:
+        return named_weights[compact]
+    return value
+
+
+def _normalize_style(style: Optional[str]) -> str:
+    value = (style or "normal").strip().lower()
+    return "normal" if value == "regular" else value
+
+
+def _infer_variant(name: str, configured_weight: Optional[str], configured_style: Optional[str]) -> Tuple[str, str]:
+    words = re.sub(r"[_-]+", " ", (name or "").lower())
+    weight = _normalize_weight(configured_weight)
+    if weight == "400":
+        if re.search(r"\b(black|heavy)\b", words):
+            weight = "900"
+        elif re.search(r"\b(extra|ultra)\s*bold\b", words):
+            weight = "800"
+        elif re.search(r"\b(semi|demi)\s*bold\b", words):
+            weight = "600"
+        elif re.search(r"\bbold\b", words):
+            weight = "700"
+        elif re.search(r"\bmedium\b", words):
+            weight = "500"
+        elif re.search(r"\b(extra|ultra)\s*light\b", words):
+            weight = "200"
+        elif re.search(r"\blight\b", words):
+            weight = "300"
+        elif re.search(r"\bthin\b", words):
+            weight = "100"
+
+    style = _normalize_style(configured_style)
+    if style == "normal" and re.search(r"\b(italic|oblique)\b", words):
+        style = "oblique" if "oblique" in words else "italic"
+    return weight, style
 
 
 def _extract_font_face_variant_key(font_face_block: str) -> str:
@@ -122,13 +169,30 @@ def inject_fonts_into_svg(svg_content: str, fonts: List[Font], base_url: Optiona
     if not fonts:
         return svg_content
     
-    # Create cache key from SVG content hash and font IDs
-    # This allows us to cache font-injected SVGs to avoid reprocessing
+    # Include every input that can change the generated @font-face rules. The
+    # versioned prefix also prevents pre-fix CSS from surviving a deployment.
     svg_hash = hashlib.sha256(svg_content.encode('utf-8')).hexdigest()
-    font_ids = sorted([str(font.id) for font in fonts])
-    font_ids_str = '_'.join(font_ids)
-    font_ids_hash = hashlib.sha256(font_ids_str.encode('utf-8')).hexdigest()
-    cache_key = f"svg_fonts_{svg_hash}_{font_ids_hash}_{embed_base64}"
+    font_signatures = sorted(
+        ({
+            "id": str(font.id),
+            "name": font.name or "",
+            "family": getattr(font, "family", "") or "",
+            "weight": getattr(font, "weight", "") or "",
+            "style": getattr(font, "style", "") or "",
+            "file": getattr(getattr(font, "font_file", None), "name", "") or "",
+        } for font in fonts),
+        key=lambda item: json.dumps(item, sort_keys=True),
+    )
+    cache_inputs = json.dumps(
+        {
+            "fonts": font_signatures,
+            "base_url": base_url or "",
+            "embed_base64": embed_base64,
+        },
+        sort_keys=True,
+    )
+    fonts_hash = hashlib.sha256(cache_inputs.encode('utf-8')).hexdigest()
+    cache_key = f"svg_fonts_v2_{svg_hash}_{fonts_hash}"
     
     # Try to get from cache (cache for 1 hour)
     cached_result = cache.get(cache_key)
@@ -181,19 +245,30 @@ def inject_fonts_into_svg(svg_content: str, fonts: List[Font], base_url: Optiona
         if not font_url:
             continue
         
-        weight = getattr(font, 'weight', 'normal') or 'normal'
-        style = getattr(font, 'style', 'normal') or 'normal'
+        weight, style = _infer_variant(
+            getattr(font, 'name', '') or '',
+            getattr(font, 'weight', 'normal'),
+            getattr(font, 'style', 'normal'),
+        )
 
         # A template can reference the full face name ("Arial Black") while the
         # record only carries the bare family ("Arial"). Emitting every such
         # record under the bare family collapses all faces onto one @font-face
-        # descriptor, so a single file wins for every text. Emit under the exact
-        # face name the SVG uses when it uses it, and keep the family emission
-        # only when it does not collide with another file (first file wins).
-        emit_families = []
+        # descriptor, so a single file wins for every text. Emit the exact face
+        # name for direct references and the canonical family with the inferred
+        # weight/style descriptor.
+        emit_faces = []
+
+        def add_face(family, face_weight, face_style):
+            variant_key = _normalize_font_key(family, face_weight, face_style)
+            if not any(item[0] == variant_key for item in emit_faces):
+                emit_faces.append((variant_key, family, _normalize_weight(face_weight), _normalize_style(face_style)))
+
         name_key = re.sub(r'[^a-z0-9]', '', (getattr(font, 'name', None) or '').lower())
         if name_key and name_key in alias_map:
-            emit_families.append(alias_map[name_key])
+            exact_family = alias_map[name_key]
+            add_face(exact_family, "400", "normal")
+            add_face(exact_family, weight, style)
 
         # If we have a clean family name, use it.
         # Otherwise fallback to matching logic which might grab the full name "Roboto Bold" as family
@@ -214,14 +289,11 @@ def inject_fonts_into_svg(svg_content: str, fonts: List[Font], base_url: Optiona
             if not family_candidate:
                 # If no family set and no match, default to name
                 family_candidate = font.name
-        if family_candidate and family_candidate not in emit_families:
-            emit_families.append(family_candidate)
+        if family_candidate:
+            add_face(family_candidate, weight, style)
 
-        for css_family in emit_families:
-            # Generate unique key for this specific variant
-            variant_key = _normalize_font_key(css_family, weight, style)
-
-            font_faces.append((variant_key, css_family, _build_font_face(css_family, font_url, font_format, weight, style)))
+        for variant_key, css_family, face_weight, face_style in emit_faces:
+            font_faces.append((variant_key, css_family, _build_font_face(css_family, font_url, font_format, face_weight, face_style)))
     
     # Deduplicate font-faces by unique key (family + weight + style)
     # Map: normalized_variant_key -> (css_family, font_face_css)

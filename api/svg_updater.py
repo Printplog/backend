@@ -122,6 +122,55 @@ def _bool_from_value(value: Any) -> bool:
     return value_str in {"true", "1", "yes", "y"}
 
 
+def _apply_text_preserving_layout(el, value: str) -> None:
+    """Replace SVG text without discarding authored tspan positioning."""
+    lines = value.split("\n")
+    spans = [child for child in el if child.tag.split("}")[-1].lower() == "tspan"]
+    has_leading_text = bool((el.text or "").strip())
+
+    if not spans and len(lines) == 1:
+        el.text = lines[0]
+        return
+
+    namespace = el.tag.split("}")[0][1:] if el.tag.startswith("{") else None
+    tspan_tag = f"{{{namespace}}}tspan" if namespace else "tspan"
+    required_spans = max(0, len(lines) - 1) if has_leading_text else len(lines)
+
+    while len(spans) > required_spans:
+        span = spans.pop()
+        el.remove(span)
+
+    while len(spans) < required_spans:
+        template = spans[-1] if spans else None
+        span = etree.Element(tspan_tag)
+        if template is not None:
+            for key, attribute_value in template.attrib.items():
+                if key not in {"id", "data-internal-id"}:
+                    span.set(key, attribute_value)
+        else:
+            span.set("x", el.get("x", "0"))
+        if (spans or has_leading_text) and not span.get("y") and not span.get("dy"):
+            font_size_match = re.match(r"[-+]?\d*\.?\d+", el.get("font-size", "16"))
+            font_size = float(font_size_match.group(0)) if font_size_match else 16.0
+            try:
+                ratio = float(el.get("data-lh-ratio", "1.2") or 1.2)
+            except (TypeError, ValueError):
+                ratio = 1.2
+            span.set("dy", str(font_size * ratio))
+        el.append(span)
+        spans.append(span)
+
+    if has_leading_text:
+        el.text = lines[0] if lines else ""
+        span_lines = lines[1:]
+    else:
+        el.text = None
+        span_lines = lines
+
+    for span, line in zip(spans, span_lines):
+        span.text = line or "\u00a0"
+
+
 def _normalize_transform(el):
     """
     Consolidate transforms from both 'style' and 'transform' attribute.
@@ -198,12 +247,16 @@ def update_svg_from_field_updates(
     if not svg_content or not form_fields:
         return svg_content, form_fields
 
-    # Create cache key from SVG hash and field updates
-    # This allows us to cache processed results for identical inputs
+    # Include both field definitions and updates because layout metadata in the
+    # definitions affects the result. Versioning avoids serving pre-fix SVGs.
     svg_hash = hashlib.sha256(svg_content.encode('utf-8')).hexdigest()
-    field_updates_str = json.dumps(field_updates or [], sort_keys=True)
-    updates_hash = hashlib.sha256(field_updates_str.encode('utf-8')).hexdigest()
-    cache_key = f"svg_update_{svg_hash}_{updates_hash}"
+    update_inputs = json.dumps(
+        {"form_fields": form_fields, "field_updates": field_updates or []},
+        sort_keys=True,
+        default=str,
+    )
+    updates_hash = hashlib.sha256(update_inputs.encode('utf-8')).hexdigest()
+    cache_key = f"svg_update_layout_v2_{svg_hash}_{updates_hash}"
     
     # Try to get from cache (cache for 1 hour)
     cached_result = cache.get(cache_key)
@@ -437,9 +490,12 @@ def update_svg_from_field_updates(
                     continue
 
                 string_value = "" if value is None else str(value)
-                for child in list(el):
-                    el.remove(child)
-                el.text = string_value
+                if tag_name == "text":
+                    _apply_text_preserving_layout(el, string_value)
+                else:
+                    for child in list(el):
+                        el.remove(child)
+                    el.text = string_value
 
             # 4. UNIVERSAL TRANSFORMATIONS (Rotation)
             # Apply rotation to any element that hasn't been skipped

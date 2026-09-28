@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 
 from django.test import SimpleTestCase
 
@@ -90,6 +91,10 @@ class FontInjectorTests(SimpleTestCase):
         self.assertIn('url("https://cdn.test/fonts/arial.ttf")', result)
         self.assertIn('url("https://cdn.test/fonts/arial-black.ttf")', result)
         self.assertIn('url("https://cdn.test/fonts/arial-bold.ttf")', result)
+        faces = re.findall(r"@font-face\s*\{[^}]+\}", result)
+        self.assertTrue(any('font-family: "Arial";' in face and 'arial-black.ttf' in face and 'font-weight: 900;' in face for face in faces))
+        self.assertTrue(any('font-family: "Arial";' in face and 'arial-bold.ttf' in face and 'font-weight: 700;' in face for face in faces))
+        self.assertTrue(any('font-family: "Arial Black";' in face and 'arial-black.ttf' in face and 'font-weight: 400;' in face for face in faces))
 
     def test_font_without_family_falls_back_to_name_without_crashing(self):
         svg = "<svg><text>Hello</text></svg>"
