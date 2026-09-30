@@ -122,7 +122,50 @@ def _bool_from_value(value: Any) -> bool:
     return value_str in {"true", "1", "yes", "y"}
 
 
-def _apply_text_preserving_layout(el, value: str) -> None:
+def _parse_svg_offset(value: Any, font_size: float) -> float | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    match = re.fullmatch(r"([-+]?\d*\.?\d+(?:e[-+]?\d+)?)(em|px)?", normalized)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    return amount * font_size if match.group(2) == "em" else amount
+
+
+def _resolve_svg_font_size(el, root) -> float:
+    """Resolve the inherited SVG font size from attributes, inline CSS, or classes."""
+    current = el
+    while current is not None:
+        direct = _parse_svg_offset(current.get("font-size"), 16.0)
+        if direct and direct > 0:
+            return direct
+
+        inline_match = re.search(r"font-size\s*:\s*([-+]?\d*\.?\d+)", current.get("style", ""), re.I)
+        if inline_match:
+            return float(inline_match.group(1))
+
+        class_names = (current.get("class") or "").split()
+        if class_names:
+            resolved = None
+            for style_el in root.xpath('//*[local-name()="style"]'):
+                css = "".join(style_el.itertext())
+                for selectors, declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+                    if any(
+                        re.search(rf"\.{re.escape(class_name)}(?![\w-])", selector)
+                        for class_name in class_names
+                        for selector in selectors.split(",")
+                    ):
+                        size_match = re.search(r"font-size\s*:\s*([-+]?\d*\.?\d+)", declarations, re.I)
+                        if size_match:
+                            resolved = float(size_match.group(1))
+            if resolved and resolved > 0:
+                return resolved
+        current = current.getparent()
+    return 16.0
+
+
+def _apply_text_preserving_layout(el, value: str, font_size: float) -> None:
     """Replace SVG text without discarding authored tspan positioning."""
     lines = value.split("\n")
     spans = [child for child in el if child.tag.split("}")[-1].lower() == "tspan"]
@@ -135,6 +178,27 @@ def _apply_text_preserving_layout(el, value: str) -> None:
     namespace = el.tag.split("}")[0][1:] if el.tag.startswith("{") else None
     tspan_tag = f"{{{namespace}}}tspan" if namespace else "tspan"
     required_spans = max(0, len(lines) - 1) if has_leading_text else len(lines)
+    minimum_safe_line_height = font_size * 0.7
+    try:
+        saved_ratio = float(el.get("data-lh-ratio", "0") or 0)
+    except (TypeError, ValueError):
+        saved_ratio = 0
+
+    relative_spans = spans if has_leading_text else spans[1:]
+    authored_line_height = next(
+        (
+            amount
+            for span in relative_spans
+            if (amount := _parse_svg_offset(span.get("dy"), font_size)) is not None
+            and amount >= minimum_safe_line_height
+        ),
+        None,
+    )
+    line_height = (
+        authored_line_height
+        if authored_line_height is not None
+        else font_size * (saved_ratio if saved_ratio >= 0.7 else 1.2)
+    )
 
     while len(spans) > required_spans:
         span = spans.pop()
@@ -150,13 +214,7 @@ def _apply_text_preserving_layout(el, value: str) -> None:
         else:
             span.set("x", el.get("x", "0"))
         if (spans or has_leading_text) and not span.get("y") and not span.get("dy"):
-            font_size_match = re.match(r"[-+]?\d*\.?\d+", el.get("font-size", "16"))
-            font_size = float(font_size_match.group(0)) if font_size_match else 16.0
-            try:
-                ratio = float(el.get("data-lh-ratio", "1.2") or 1.2)
-            except (TypeError, ValueError):
-                ratio = 1.2
-            span.set("dy", str(font_size * ratio))
+            span.set("dy", f"{line_height:g}")
         el.append(span)
         spans.append(span)
 
@@ -169,6 +227,10 @@ def _apply_text_preserving_layout(el, value: str) -> None:
 
     for span, line in zip(spans, span_lines):
         span.text = line or "\u00a0"
+        if span is not spans[0] or has_leading_text:
+            offset = _parse_svg_offset(span.get("dy"), font_size)
+            if not span.get("y") and (offset is None or offset < minimum_safe_line_height):
+                span.set("dy", f"{line_height:g}")
 
 
 def _normalize_transform(el):
@@ -256,7 +318,7 @@ def update_svg_from_field_updates(
         default=str,
     )
     updates_hash = hashlib.sha256(update_inputs.encode('utf-8')).hexdigest()
-    cache_key = f"svg_update_layout_v2_{svg_hash}_{updates_hash}"
+    cache_key = f"svg_update_layout_v3_{svg_hash}_{updates_hash}"
     
     # Try to get from cache (cache for 1 hour)
     cached_result = cache.get(cache_key)
@@ -491,7 +553,7 @@ def update_svg_from_field_updates(
 
                 string_value = "" if value is None else str(value)
                 if tag_name == "text":
-                    _apply_text_preserving_layout(el, string_value)
+                    _apply_text_preserving_layout(el, string_value, _resolve_svg_font_size(el, root))
                 else:
                     for child in list(el):
                         el.remove(child)
