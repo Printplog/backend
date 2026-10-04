@@ -28,10 +28,10 @@ DEFAULT_API_KEY_SCOPES = [
 
 THEME_DEFAULTS = {
     "primaryColor": "#cee88c",
-    "backgroundColor": "#10120f",
+    "backgroundColor": "#0f1620",
     "textColor": "#ffffff",
-    "inputBackground": "#191c17",
-    "borderColor": "#34382f",
+    "inputBackground": "#1b222b",
+    "borderColor": "#272d36",
     "borderRadius": "12px",
     "fontFamily": "Inter",
     "buttonText": "Create document",
