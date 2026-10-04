@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
@@ -470,23 +471,23 @@ class AdminApiCustomerStatusView(APIView):
         return Response({"user_id": user_id, "status": entitlement.status})
 
 
-class AdminApiKeyRevokeView(APIView):
+class AdminApiKeyDeleteView(APIView):
     permission_classes = [IsSuperUser]
 
     def delete(self, request, user_id, key_id):
-        key = ApiKey.objects.filter(
-            id=key_id,
-            user_id=user_id,
-            user__is_staff=False,
-            user__is_superuser=False,
-        ).first()
-        if not key:
-            return Response({"detail": "API key not found."}, status=404)
-        if not key.revoked_at:
-            key.revoked_at = timezone.now()
-            key.save(update_fields=["revoked_at"])
+        with transaction.atomic():
+            key = ApiKey.objects.select_for_update().filter(
+                id=key_id,
+                user_id=user_id,
+                user__is_staff=False,
+                user__is_superuser=False,
+            ).first()
+            if not key:
+                return Response({"detail": "API key not found."}, status=404)
+            revoked_at = timezone.now()
             EmbedSession.objects.filter(
                 api_key=key,
                 status=EmbedSession.Status.PENDING,
-            ).update(status=EmbedSession.Status.REVOKED, revoked_at=key.revoked_at)
+            ).update(status=EmbedSession.Status.REVOKED, revoked_at=revoked_at)
+            key.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

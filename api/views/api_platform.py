@@ -214,20 +214,47 @@ class ApiKeyListCreateView(APIView):
         return Response(response, status=status.HTTP_201_CREATED)
 
 
-class ApiKeyRevokeView(APIView):
+class ApiKeyDeleteView(APIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, key_id):
-        key = get_object_or_404(ApiKey, pk=key_id, user=request.user)
-        if key.revoked_at is None:
+        with transaction.atomic():
+            key = get_object_or_404(
+                ApiKey.objects.select_for_update(),
+                pk=key_id,
+                user=request.user,
+            )
             revoked_at = timezone.now()
-            key.revoked_at = revoked_at
-            key.save(update_fields=["revoked_at"])
             EmbedSession.objects.filter(
                 api_key=key,
                 status=EmbedSession.Status.PENDING,
             ).update(status=EmbedSession.Status.REVOKED, revoked_at=revoked_at)
+            key.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ApiKeyRotateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, key_id):
+        with transaction.atomic():
+            key = get_object_or_404(
+                ApiKey.objects.select_for_update(),
+                pk=key_id,
+                user=request.user,
+            )
+            if not key.is_active:
+                raise ValidationError("Only an active API key can be rotated.")
+            token, prefix, token_hash = generate_api_key()
+            key.prefix = prefix
+            key.secret_hash = token_hash
+            key.last_used_at = None
+            key.save(update_fields=["prefix", "secret_hash", "last_used_at"])
+
+        response = ApiKeySerializer(key).data
+        response["secret"] = token
+        response["warning"] = "Copy this rotated key now. The previous key no longer works."
+        return Response(response)
 
 
 class V1ApiView(APIView):

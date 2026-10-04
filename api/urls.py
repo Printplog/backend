@@ -15,10 +15,11 @@ from .views.api_platform import (
     ApiAccessStatusView,
     ApiActivateView,
     ApiCustomerConfigurationView,
+    ApiKeyDeleteView,
     ApiKeyListCreateView,
-    ApiKeyRevokeView,
+    ApiKeyRotateView,
 )
-from .views.admin_api import AdminApiCustomersView, AdminApiCustomerStatusView, AdminApiKeyRevokeView
+from .views.admin_api import AdminApiCustomersView, AdminApiCustomerStatusView, AdminApiKeyDeleteView
 
 def health_check(request):
     return HttpResponse("OK")
@@ -41,7 +42,8 @@ urlpatterns = [
     path("api-access/activate/", ApiActivateView.as_view(), name="api-access-activate"),
     path("api-access/configuration/", ApiCustomerConfigurationView.as_view(), name="api-access-configuration"),
     path("api-access/keys/", ApiKeyListCreateView.as_view(), name="api-key-list-create"),
-    path("api-access/keys/<uuid:key_id>/", ApiKeyRevokeView.as_view(), name="api-key-revoke"),
+    path("api-access/keys/<uuid:key_id>/", ApiKeyDeleteView.as_view(), name="api-key-delete"),
+    path("api-access/keys/<uuid:key_id>/rotate/", ApiKeyRotateView.as_view(), name="api-key-rotate"),
     path("track/<str:tracking_id>/", PublicTemplateTrackingView.as_view(), name="track-template"),
     path("download-doc/", DownloadDoc.as_view(), name="download-doc"),
     path("increment-downloads/", IncrementDownloads.as_view(), name="increment-downloads"),
@@ -53,7 +55,7 @@ urlpatterns = [
     path("admin/overview/", AdminOverview.as_view(), name="admin-overview"),
     path("admin/api-customers/", AdminApiCustomersView.as_view(), name="admin-api-customers"),
     path("admin/api-customers/<int:user_id>/", AdminApiCustomerStatusView.as_view(), name="admin-api-customer-status"),
-    path("admin/api-customers/<int:user_id>/keys/<uuid:key_id>/", AdminApiKeyRevokeView.as_view(), name="admin-api-key-revoke"),
+    path("admin/api-customers/<int:user_id>/keys/<uuid:key_id>/", AdminApiKeyDeleteView.as_view(), name="admin-api-key-delete"),
     path("admin/users/", AdminUsers.as_view(), name="admin-users"),
     path("admin/users/<int:user_id>/", AdminUserDetails.as_view(), name="admin-user-details"),
     path("admin/documents/", AdminDocuments.as_view(), name="admin-documents"),

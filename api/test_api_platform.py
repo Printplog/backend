@@ -146,6 +146,36 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertNotIn("secret", listed.data[0])
         self.assertEqual(key.allowed_origins, ["https://customer.example"])
 
+    def test_rotating_key_replaces_secret_and_preserves_configuration(self):
+        token, key = self.issue_key(
+            origins=["https://customer.example"],
+            scopes=["templates:read", "sessions:write"],
+        )
+        old_prefix = key.prefix
+        self.client.force_authenticate(user=self.customer)
+
+        rotated = self.client.post(f"/api/api-access/keys/{key.id}/rotate/", {}, format="json")
+
+        self.assertEqual(rotated.status_code, status.HTTP_200_OK)
+        self.assertEqual(rotated.data["id"], str(key.id))
+        self.assertTrue(rotated.data["secret"].startswith("stz_live_"))
+        self.assertNotEqual(rotated.data["prefix"], old_prefix)
+        key.refresh_from_db()
+        self.assertEqual(key.allowed_origins, ["https://customer.example"])
+        self.assertEqual(key.scopes, ["templates:read", "sessions:write"])
+
+        self.client.force_authenticate(user=None)
+        self.api_credentials(token)
+        self.assertEqual(
+            self.client.get("/api/v1/templates").status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.api_credentials(rotated.data["secret"])
+        self.assertEqual(
+            self.client.get("/api/v1/templates").status_code,
+            status.HTTP_200_OK,
+        )
+
     def test_revoked_key_is_rejected(self):
         token, key = self.issue_key()
         key.revoked_at = timezone.now()
@@ -255,12 +285,11 @@ class ApiPlatformSecurityTests(APITestCase):
             EmbedSession.Status.REVOKED,
         )
 
-        revoke_response = self.client.delete(
+        delete_response = self.client.delete(
             f"/api/admin/api-customers/{self.customer.id}/keys/{key.id}/"
         )
-        self.assertEqual(revoke_response.status_code, status.HTTP_204_NO_CONTENT)
-        key.refresh_from_db()
-        self.assertIsNotNone(key.revoked_at)
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ApiKey.objects.filter(pk=key.id).exists())
 
     def test_api_customer_dashboard_requires_superuser(self):
         self.client.force_authenticate(user=self.customer)
@@ -650,16 +679,17 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(EmbedSession.objects.count(), 0)
 
-    def test_revoking_key_immediately_revokes_pending_embed_sessions(self):
+    def test_deleting_key_immediately_revokes_pending_embed_sessions(self):
         token, key = self.issue_key()
         created = self.create_embed_session(token)
         self.assertEqual(created.status_code, status.HTTP_201_CREATED)
         embed_token = created.data["embed_url"].split("#", 1)[1]
 
         self.client.force_authenticate(user=self.customer)
-        revoked = self.client.delete(f"/api/api-access/keys/{key.id}/")
+        deleted = self.client.delete(f"/api/api-access/keys/{key.id}/")
         self.client.force_authenticate(user=None)
-        self.assertEqual(revoked.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(deleted.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ApiKey.objects.filter(pk=key.id).exists())
 
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Embed {embed_token}",
@@ -667,7 +697,9 @@ class ApiPlatformSecurityTests(APITestCase):
         )
         response = self.client.get("/api/v1/embed/session")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertEqual(EmbedSession.objects.get(pk=created.data["id"]).status, EmbedSession.Status.REVOKED)
+        session = EmbedSession.objects.get(pk=created.data["id"])
+        self.assertEqual(session.status, EmbedSession.Status.REVOKED)
+        self.assertIsNone(session.api_key_id)
 
     def test_global_kill_switch_invalidates_existing_embed_session(self):
         token, _ = self.issue_key()
