@@ -54,6 +54,58 @@ default). Stable render errors are `queue_unavailable`, `render_timeout`,
 `render_source_unreadable`, `renderer_unavailable`, `render_storage_failed`,
 and `render_failed`.
 
+## Resend tracking support email
+
+ParcelFinda and MyFlightLookup support tickets use unique plus-addresses on
+their existing domains; no support subdomain or individual mailbox is needed.
+For example, a ticket receives replies at
+`support+<ticket-uuid>@parcelfinda.com`. The same pattern is used on
+`myflightlookup.com`.
+
+Set both credentials in **Admin → Site Settings → Integrations**. Secret fields
+are write-only: the API accepts replacements from a superuser after a fresh
+authenticator code, encrypts them at rest, and returns only whether each value
+is configured. Leaving a field blank preserves its current value.
+
+The following environment variables remain supported as bootstrap fallbacks:
+
+```text
+RESEND_API_KEY=re_...
+RESEND_WEBHOOK_SECRET=whsec_...
+```
+
+Set a stable `INTEGRATION_SECRET_ENCRYPTION_KEY` on every backend instance.
+Changing this master key makes existing admin-managed integration secrets
+unreadable. Future provider credentials should be added through the same
+write-only integration-secret registry rather than as readable settings fields.
+
+The API key must be allowed to send mail and retrieve received email content;
+a sending-only restricted key cannot process inbound reply bodies.
+
+These sender/domain settings already have production defaults and only need to
+be set when the verified Resend addresses differ:
+
+```text
+PARCEL_SUPPORT_FROM_EMAIL=ParcelFinda Support <support@parcelfinda.com>
+PARCEL_SUPPORT_DOMAIN=parcelfinda.com
+FLIGHT_SUPPORT_FROM_EMAIL=MyFlightLookup Support <support@myflightlookup.com>
+FLIGHT_SUPPORT_DOMAIN=myflightlookup.com
+```
+
+In Resend, create one webhook with endpoint
+`https://api.sharptoolz.com/api/webhooks/resend/`. Subscribe it to
+`email.received`, `email.sent`, `email.delivered`, `email.delivery_delayed`,
+`email.bounced`, `email.failed`, `email.suppressed`, and `email.complained`.
+Copy that webhook's signing secret into the admin Integrations page (or the
+`RESEND_WEBHOOK_SECRET` bootstrap fallback).
+
+The flow is bidirectional. A new public request is emailed to the SharpToolz
+user who owns the matching tracked document. Replies from either the owner or
+the customer are validated against the ticket participants, forwarded to the
+other person, and stored in the dashboard conversation. Webhook requests are
+verified against the raw request body and duplicate received emails are
+ignored.
+
 ## Direct BNB Chain payment gateway
 
 The wallet app can receive and distribute USDT directly on BNB Smart Chain.

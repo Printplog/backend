@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from ..models import PurchasedTemplate, TrackingSupportMessage
+from ..models import PurchasedTemplate, TrackingSupportMessage, TrackingSupportReply
 
 
 class PublicTrackingSupportSerializer(serializers.Serializer):
@@ -32,6 +32,19 @@ class TrackingSupportMessageSerializer(serializers.ModelSerializer):
     document_id = serializers.UUIDField(read_only=True)
     document_name = serializers.CharField(source="document.name", read_only=True)
     source_label = serializers.CharField(source="get_source_display", read_only=True)
+    conversation = serializers.SerializerMethodField()
+
+    def get_conversation(self, obj):
+        initial = {
+            "id": f"initial-{obj.id}",
+            "direction": TrackingSupportReply.Direction.CUSTOMER,
+            "body": obj.message,
+            "sender_email": obj.customer_email,
+            "delivery_status": TrackingSupportReply.DeliveryStatus.RECEIVED,
+            "created_at": obj.created_at,
+        }
+        replies = TrackingSupportReplySerializer(obj.replies.all(), many=True).data
+        return [initial, *replies]
 
     class Meta:
         model = TrackingSupportMessage
@@ -49,6 +62,7 @@ class TrackingSupportMessageSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "updated_at",
+            "conversation",
         ]
         read_only_fields = fields
 
@@ -57,3 +71,21 @@ class TrackingSupportStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = TrackingSupportMessage
         fields = ["status"]
+
+
+class TrackingSupportReplySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TrackingSupportReply
+        fields = [
+            "id",
+            "direction",
+            "body",
+            "sender_email",
+            "delivery_status",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class TrackingSupportReplyCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=10000, trim_whitespace=True)

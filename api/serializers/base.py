@@ -81,6 +81,19 @@ class FontSerializer(serializers.ModelSerializer):
 
 
 class SiteSettingsSerializer(serializers.ModelSerializer):
+    resend_api_key_configured = serializers.SerializerMethodField()
+    resend_webhook_secret_configured = serializers.SerializerMethodField()
+
+    def get_resend_api_key_configured(self, obj):
+        from ..utils.integration_secrets import integration_secret_status
+
+        return integration_secret_status("resend_api_key")["configured"]
+
+    def get_resend_webhook_secret_configured(self, obj):
+        from ..utils.integration_secrets import integration_secret_status
+
+        return integration_secret_status("resend_webhook_secret")["configured"]
+
     class Meta:
         model = SiteSettings
         fields = '__all__'

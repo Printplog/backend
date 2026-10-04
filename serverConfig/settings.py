@@ -74,6 +74,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-+#ds1yk1fdrx$=3&yf+!q$r9sy
 API_KEY_PEPPER = os.getenv("API_KEY_PEPPER", "" if IS_PRODUCTION else SECRET_KEY)
 ADMIN_2FA_ENCRYPTION_KEY = os.getenv("ADMIN_2FA_ENCRYPTION_KEY", SECRET_KEY)
 PAYMENT_ENCRYPTION_KEY = os.getenv("PAYMENT_ENCRYPTION_KEY", SECRET_KEY)
+INTEGRATION_SECRET_ENCRYPTION_KEY = os.getenv("INTEGRATION_SECRET_ENCRYPTION_KEY", SECRET_KEY)
 ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "SharpToolz")
 ADMIN_2FA_CHALLENGE_SECONDS = env_int("ADMIN_2FA_CHALLENGE_SECONDS", 600)
 ADMIN_2FA_MAX_ATTEMPTS = env_int("ADMIN_2FA_MAX_ATTEMPTS", 5)
@@ -687,10 +688,14 @@ if IS_PRODUCTION:
     weak_api_pepper = len(API_KEY_PEPPER) < 50 or len(set(API_KEY_PEPPER)) < 8
     weak_admin_2fa_key = len(ADMIN_2FA_ENCRYPTION_KEY) < 50 or len(set(ADMIN_2FA_ENCRYPTION_KEY)) < 8
     weak_payment_key = len(PAYMENT_ENCRYPTION_KEY) < 50 or len(set(PAYMENT_ENCRYPTION_KEY)) < 8
-    if weak_secret or weak_signing_key or weak_api_pepper or weak_admin_2fa_key or weak_payment_key:
+    weak_integration_key = (
+        len(INTEGRATION_SECRET_ENCRYPTION_KEY) < 50
+        or len(set(INTEGRATION_SECRET_ENCRYPTION_KEY)) < 8
+    )
+    if weak_secret or weak_signing_key or weak_api_pepper or weak_admin_2fa_key or weak_payment_key or weak_integration_key:
         raise RuntimeError(
             "SECRET_KEY, JWT_SIGNING_KEY, API_KEY_PEPPER, ADMIN_2FA_ENCRYPTION_KEY, "
-            "and PAYMENT_ENCRYPTION_KEY must be strong production secrets"
+            "PAYMENT_ENCRYPTION_KEY, and INTEGRATION_SECRET_ENCRYPTION_KEY must be strong production secrets"
         )
 
 SITE_ID = 1
@@ -718,6 +723,22 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
 # Django defaults to no timeout, which lets a wedged mail server hold a worker
 # open indefinitely. Bound every SMTP conversation instead.
 EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', 10))
+
+# Branded tracking support email. Resend receives any local-part on each
+# verified domain, so every ticket can use support+<ticket-id>@domain without
+# provisioning mailboxes or another subdomain.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_WEBHOOK_SECRET = os.getenv("RESEND_WEBHOOK_SECRET", "")
+PARCEL_SUPPORT_FROM_EMAIL = os.getenv(
+    "PARCEL_SUPPORT_FROM_EMAIL",
+    "ParcelFinda Support <support@parcelfinda.com>",
+)
+FLIGHT_SUPPORT_FROM_EMAIL = os.getenv(
+    "FLIGHT_SUPPORT_FROM_EMAIL",
+    "MyFlightLookup Support <support@myflightlookup.com>",
+)
+PARCEL_SUPPORT_DOMAIN = os.getenv("PARCEL_SUPPORT_DOMAIN", "parcelfinda.com")
+FLIGHT_SUPPORT_DOMAIN = os.getenv("FLIGHT_SUPPORT_DOMAIN", "myflightlookup.com")
 
 # Defined after the block above so it wins over the SMTP backend.
 if TESTING:

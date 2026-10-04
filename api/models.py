@@ -311,6 +311,72 @@ class TrackingSupportMessage(models.Model):
         return f"{self.get_source_display()} · {self.tracking_id} · {self.subject}"
 
 
+class TrackingSupportReply(models.Model):
+    class Direction(models.TextChoices):
+        CUSTOMER = "customer", "Customer"
+        OWNER = "owner", "Document owner"
+
+    class DeliveryStatus(models.TextChoices):
+        RECEIVED = "received", "Received"
+        QUEUED = "queued", "Queued"
+        SENT = "sent", "Sent"
+        DELIVERED = "delivered", "Delivered"
+        DELAYED = "delayed", "Delayed"
+        BOUNCED = "bounced", "Bounced"
+        FAILED = "failed", "Failed"
+        SUPPRESSED = "suppressed", "Suppressed"
+        COMPLAINED = "complained", "Complained"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    support_message = models.ForeignKey(
+        TrackingSupportMessage,
+        on_delete=models.CASCADE,
+        related_name="replies",
+    )
+    direction = models.CharField(max_length=12, choices=Direction.choices)
+    body = models.TextField(max_length=10000)
+    sender_email = models.EmailField(max_length=254)
+    delivery_status = models.CharField(
+        max_length=16,
+        choices=DeliveryStatus.choices,
+        default=DeliveryStatus.RECEIVED,
+    )
+    resend_email_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
+    external_message_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["support_message", "created_at"], name="support_reply_thread_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_direction_display()} reply on {self.support_message_id}"
+
+
+class IntegrationSecret(models.Model):
+    """Encrypted, write-only runtime credentials managed by a superuser."""
+
+    key = models.CharField(max_length=100, unique=True)
+    encrypted_value = models.TextField()
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_integration_secrets",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["key"]
+
+    def __str__(self):
+        return self.key
+
+
 class ApiEntitlement(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"

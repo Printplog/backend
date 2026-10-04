@@ -7,7 +7,7 @@ from .views import (
     WalletStatsView, WalletListView, WalletAdjustView, PendingRequestsView, ApproveRequestView, RejectRequestView, TransactionHistoryView,
     PayoutListView, PayoutApproveView, PayoutRejectView,
     AiChatView, AiChatSessionViewSet, ContactView,
-    PublicTrackingSupportView, TrackingSupportMessageDetailView, TrackingSupportMessageListView,
+    PublicTrackingSupportView, ResendWebhookView, TrackingSupportMessageDetailView, TrackingSupportMessageListView, TrackingSupportReplyView,
 )
 from django.urls import path
 from django.urls import include
@@ -54,6 +54,8 @@ urlpatterns = [
     path("tracking-support/", PublicTrackingSupportView.as_view(), name="tracking-support-create"),
     path("support/messages/", TrackingSupportMessageListView.as_view(), name="tracking-support-list"),
     path("support/messages/<uuid:message_id>/", TrackingSupportMessageDetailView.as_view(), name="tracking-support-detail"),
+    path("support/messages/<uuid:message_id>/replies/", TrackingSupportReplyView.as_view(), name="tracking-support-reply"),
+    path("webhooks/resend/", ResendWebhookView.as_view(), name="resend-webhook"),
 
     # Admin views
     path("admin/overview/", AdminOverview.as_view(), name="admin-overview"),

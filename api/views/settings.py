@@ -7,6 +7,12 @@ from accounts.two_factor import is_enabled_for_user, verify_settings_totp_code
 
 from ..models import SiteSettings
 from ..serializers import SiteSettingsSerializer, PublicSiteSettingsSerializer
+from ..utils.integration_secrets import (
+    IntegrationSecretError,
+    SECRET_FIELDS,
+    set_integration_secret,
+    validate_integration_secret,
+)
 
 class SiteSettingsViewSet(viewsets.ViewSet):
     """
@@ -21,7 +27,7 @@ class SiteSettingsViewSet(viewsets.ViewSet):
         return [IsAuthenticated()]
 
     def get_serializer_class(self):
-        if self.request.user and self.request.user.is_authenticated:
+        if self.request.user and self.request.user.is_superuser:
             return SiteSettingsSerializer
         return PublicSiteSettingsSerializer
 
@@ -54,6 +60,16 @@ class SiteSettingsViewSet(viewsets.ViewSet):
             )
         settings_data = request.data.copy()
         settings_data.pop('two_factor_code', None)
+        secret_values = {}
+        for field_name in SECRET_FIELDS:
+            raw_value = settings_data.pop(field_name, None)
+            if raw_value is None or not str(raw_value).strip():
+                continue
+            try:
+                secret_values[field_name] = validate_integration_secret(field_name, raw_value)
+            except IntegrationSecretError as exc:
+                return Response({field_name: [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = SiteSettingsSerializer(settings_obj, data=settings_data, partial=True)
         if serializer.is_valid():
             if not verify_settings_totp_code(request.user, two_factor_code):
@@ -62,6 +78,8 @@ class SiteSettingsViewSet(viewsets.ViewSet):
                     status=status.HTTP_403_FORBIDDEN,
                 )
             serializer.save()
+            for field_name, secret_value in secret_values.items():
+                set_integration_secret(field_name, secret_value, updated_by=request.user)
             
             # Log action
             from analytics.utils import log_action
@@ -70,7 +88,10 @@ class SiteSettingsViewSet(viewsets.ViewSet):
                 action="UPDATE_SETTINGS",
                 target="Site Settings",
                 ip_address=request.META.get('REMOTE_ADDR'),
-                details={key: value for key, value in settings_data.items()}
+                details={
+                    **{key: value for key, value in settings_data.items()},
+                    "integration_secrets_updated": sorted(secret_values),
+                }
             )
             
             return Response(serializer.data)
