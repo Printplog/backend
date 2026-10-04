@@ -55,11 +55,33 @@ class TrackingSupportTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["unread_count"], 1)
         self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["document_id"], str(self.document.id))
         self.assertEqual(response.data["results"][0]["tracking_id"], "PF-2048")
 
         self.client.force_authenticate(user=self.other)
         other_response = self.client.get(reverse("tracking-support-list"))
         self.assertEqual(other_response.data["results"], [])
+
+    def test_owner_can_filter_messages_by_document(self):
+        self.submit()
+        other_document = PurchasedTemplate.objects.create(
+            buyer=self.owner,
+            template=self.document.template,
+            name="Other parcel",
+            tracking_id="PF-4096",
+        )
+        self.submit(tracking_id="PF-4096", subject="Other delivery")
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(
+            reverse("tracking-support-list"),
+            {"document_id": str(self.document.id)},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["document_id"], str(self.document.id))
+        self.assertNotEqual(response.data["results"][0]["document_id"], str(other_document.id))
 
     def test_owner_can_update_status_but_other_user_cannot(self):
         self.submit()

@@ -41,10 +41,13 @@ class TrackingSupportMessageListView(APIView):
         ).select_related("document")
         source = request.query_params.get("source", "").strip()
         message_status = request.query_params.get("status", "").strip()
+        document_id = request.query_params.get("document_id", "").strip()
         if source:
             messages = messages.filter(source=source)
         if message_status:
             messages = messages.filter(status=message_status)
+        if document_id:
+            messages = messages.filter(document_id=document_id)
         return Response({
             "results": TrackingSupportMessageSerializer(messages, many=True).data,
             "unread_count": messages.filter(status=TrackingSupportMessage.Status.NEW).count(),

@@ -29,6 +29,7 @@ class PublicTrackingSupportSerializer(serializers.Serializer):
 
 
 class TrackingSupportMessageSerializer(serializers.ModelSerializer):
+    document_id = serializers.UUIDField(read_only=True)
     document_name = serializers.CharField(source="document.name", read_only=True)
     source_label = serializers.CharField(source="get_source_display", read_only=True)
 
@@ -36,6 +37,7 @@ class TrackingSupportMessageSerializer(serializers.ModelSerializer):
         model = TrackingSupportMessage
         fields = [
             "id",
+            "document_id",
             "tracking_id",
             "document_name",
             "source",
