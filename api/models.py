@@ -274,6 +274,43 @@ class PurchasedTemplate(models.Model):
         return f"{self.buyer.username} - {self.name}"
 
 
+class TrackingSupportMessage(models.Model):
+    class Source(models.TextChoices):
+        PARCEL_FINDA = "parcel_finda", "ParcelFinda"
+        FLIGHT_LOOKUP = "flight_lookup", "MyFlightLookup"
+
+    class Status(models.TextChoices):
+        NEW = "new", "New"
+        READ = "read", "Read"
+        CLOSED = "closed", "Closed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.ForeignKey(
+        PurchasedTemplate,
+        on_delete=models.CASCADE,
+        related_name="support_messages",
+    )
+    tracking_id = models.CharField(max_length=100)
+    source = models.CharField(max_length=24, choices=Source.choices)
+    customer_name = models.CharField(max_length=120)
+    customer_email = models.EmailField(max_length=254)
+    subject = models.CharField(max_length=160)
+    message = models.TextField(max_length=5000)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.NEW)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["document", "-created_at"], name="support_doc_created_idx"),
+            models.Index(fields=["status", "-created_at"], name="support_status_created_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_source_display()} · {self.tracking_id} · {self.subject}"
+
+
 class ApiEntitlement(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"

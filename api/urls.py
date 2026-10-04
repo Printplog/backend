@@ -7,6 +7,7 @@ from .views import (
     WalletStatsView, WalletListView, WalletAdjustView, PendingRequestsView, ApproveRequestView, RejectRequestView, TransactionHistoryView,
     PayoutListView, PayoutApproveView, PayoutRejectView,
     AiChatView, AiChatSessionViewSet, ContactView,
+    PublicTrackingSupportView, TrackingSupportMessageDetailView, TrackingSupportMessageListView,
 )
 from django.urls import path
 from django.urls import include
@@ -50,6 +51,9 @@ urlpatterns = [
     path("remove-background/", RemoveBackgroundView.as_view(), name="remove-background"),
     path("ai-chat/", AiChatView.as_view(), name="ai-chat"),
     path("contact/", ContactView.as_view(), name="contact"),
+    path("tracking-support/", PublicTrackingSupportView.as_view(), name="tracking-support-create"),
+    path("support/messages/", TrackingSupportMessageListView.as_view(), name="tracking-support-list"),
+    path("support/messages/<uuid:message_id>/", TrackingSupportMessageDetailView.as_view(), name="tracking-support-detail"),
 
     # Admin views
     path("admin/overview/", AdminOverview.as_view(), name="admin-overview"),
