@@ -74,6 +74,8 @@ class TrackingSupportTests(APITestCase):
         )
         self.assertEqual(thread.status_code, status.HTTP_200_OK)
         self.assertEqual(thread.data["conversation"], [])
+        self.assertEqual(thread.data["channel"], response.data["channel"])
+        self.assertIn("realtime", thread.data)
 
     def test_customer_token_controls_conversation_access(self):
         created = self.submit()
@@ -108,7 +110,7 @@ class TrackingSupportTests(APITestCase):
         reply = TrackingSupportReply.objects.get()
         self.assertEqual(reply.direction, TrackingSupportReply.Direction.CUSTOMER)
         self.assertEqual(reply.sender_email, ticket.customer_email)
-        publish_update.assert_called_once()
+        publish_update.assert_called_once_with(ticket, event="support.customer_message")
 
     @override_settings(
         PUSHER_APP_ID="12345",

@@ -220,7 +220,7 @@ def process_inbound_email(data):
         )
         ticket.status = TrackingSupportMessage.Status.NEW
         ticket.save(update_fields=["status", "updated_at"])
-        publish_support_update(ticket)
+        publish_support_update(ticket, event="support.customer_message")
         return "customer_reply"
 
     if sender == owner_email:

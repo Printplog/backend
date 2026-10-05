@@ -179,7 +179,10 @@ class PublicTrackingSupportThreadView(APIView):
             ticket = _customer_ticket(request, message_id)
         except TrackingSupportMessage.DoesNotExist:
             return Response({"detail": "Conversation not found."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(PublicTrackingSupportThreadSerializer(ticket).data)
+        data = PublicTrackingSupportThreadSerializer(ticket).data
+        data["channel"] = ticket_channel(ticket.id)
+        data["realtime"] = public_realtime_config()
+        return Response(data)
 
 
 class PublicTrackingSupportReplyView(APIView):
@@ -217,7 +220,7 @@ class PublicTrackingSupportReplyView(APIView):
             reply.save(update_fields=["resend_email_id", "delivery_status"])
         ticket.status = TrackingSupportMessage.Status.NEW
         ticket.save(update_fields=["status", "updated_at"])
-        publish_support_update(ticket)
+        publish_support_update(ticket, event="support.customer_message")
         return Response(TrackingSupportReplySerializer(reply).data, status=status.HTTP_201_CREATED)
 
 
