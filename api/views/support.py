@@ -13,6 +13,8 @@ from ..models import TrackingSupportMessage, TrackingSupportReply
 from ..serializers.support import (
     PublicTrackingSupportSerializer,
     PublicTrackingSupportThreadSerializer,
+    SupportEmailVerificationConfirmSerializer,
+    SupportEmailVerificationRequestSerializer,
     TrackingSupportReplyCreateSerializer,
     TrackingSupportReplySerializer,
     TrackingSupportMessageSerializer,
@@ -37,8 +39,60 @@ from ..utils.support_realtime import (
     publish_support_update,
     ticket_channel,
 )
+from ..utils.support_verification import (
+    CHALLENGE_TTL_SECONDS,
+    SupportVerificationError,
+    confirm_email_verification,
+    request_email_verification,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class SupportEmailVerificationRequestView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "support_verification"
+
+    def post(self, request):
+        serializer = SupportEmailVerificationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            challenge_id = request_email_verification(**serializer.validated_data)
+        except SupportEmailError:
+            logger.exception("Could not send support email verification code")
+            return Response(
+                {"detail": "The verification email could not be sent. Try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        email = serializer.validated_data["email"]
+        local, _, domain = email.partition("@")
+        email_hint = f"{local[:2]}{'*' * max(1, len(local) - 2)}@{domain}"
+        return Response({
+            "challenge_id": challenge_id,
+            "email_hint": email_hint,
+            "expires_in": CHALLENGE_TTL_SECONDS,
+        })
+
+
+class SupportEmailVerificationConfirmView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "support_verification"
+
+    def post(self, request):
+        serializer = SupportEmailVerificationConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            token, payload = confirm_email_verification(**serializer.validated_data)
+        except SupportVerificationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "verification_token": token,
+            "email": payload["email"],
+        })
 
 
 class PublicTrackingSupportView(APIView):

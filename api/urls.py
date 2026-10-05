@@ -9,7 +9,8 @@ from .views import (
     AiChatView, AiChatSessionViewSet, ContactView,
     OwnerSupportRealtimeAuthView, PublicSupportRealtimeAuthView,
     PublicTrackingSupportReplyView, PublicTrackingSupportThreadView,
-    PublicTrackingSupportView, ResendWebhookView, TrackingSupportMessageDetailView,
+    PublicTrackingSupportView, ResendWebhookView, SupportEmailVerificationConfirmView,
+    SupportEmailVerificationRequestView, TrackingSupportMessageDetailView,
     TrackingSupportMessageListView, TrackingSupportReplyView,
 )
 from django.urls import path
@@ -55,6 +56,8 @@ urlpatterns = [
     path("ai-chat/", AiChatView.as_view(), name="ai-chat"),
     path("contact/", ContactView.as_view(), name="contact"),
     path("tracking-support/", PublicTrackingSupportView.as_view(), name="tracking-support-create"),
+    path("tracking-support/verify-email/request/", SupportEmailVerificationRequestView.as_view(), name="tracking-support-email-request"),
+    path("tracking-support/verify-email/confirm/", SupportEmailVerificationConfirmView.as_view(), name="tracking-support-email-confirm"),
     path("tracking-support/<uuid:message_id>/", PublicTrackingSupportThreadView.as_view(), name="tracking-support-public-thread"),
     path("tracking-support/<uuid:message_id>/replies/", PublicTrackingSupportReplyView.as_view(), name="tracking-support-public-reply"),
     path("tracking-support/<uuid:message_id>/realtime-auth/", PublicSupportRealtimeAuthView.as_view(), name="tracking-support-public-realtime-auth"),

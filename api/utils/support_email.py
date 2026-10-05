@@ -25,8 +25,8 @@ class SupportEmailError(Exception):
     pass
 
 
-def _brand(ticket):
-    if ticket.source == TrackingSupportMessage.Source.PARCEL_FINDA:
+def _brand_for_source(source):
+    if source == TrackingSupportMessage.Source.PARCEL_FINDA:
         return {
             "name": "ParcelFinda",
             "from": settings.PARCEL_SUPPORT_FROM_EMAIL,
@@ -37,6 +37,10 @@ def _brand(ticket):
         "from": settings.FLIGHT_SUPPORT_FROM_EMAIL,
         "domain": settings.FLIGHT_SUPPORT_DOMAIN.lower(),
     }
+
+
+def _brand(ticket):
+    return _brand_for_source(ticket.source)
 
 
 def reply_address(ticket):
@@ -83,6 +87,47 @@ def _resend_request(method, path, *, json=None, idempotency_key=None):
     except (requests.RequestException, ValueError) as exc:
         logger.exception("Resend request failed for %s %s", method, path)
         raise SupportEmailError("The support email could not be delivered.") from exc
+
+
+def send_support_verification_code(*, source, recipient, tracking_id, code, challenge_id):
+    brand = _brand_for_source(source)
+    safe_code = escape(code)
+    safe_tracking_id = escape(tracking_id)
+    html = (
+        '<div style="background:#f6f7f4;padding:32px 16px;font-family:Arial,sans-serif;color:#17231f">'
+        '<div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e4e8e5;padding:32px">'
+        f'<p style="margin:0 0 20px;font-size:13px;color:#64716c">{escape(brand["name"])} support</p>'
+        '<h1 style="margin:0 0 12px;font-size:22px">Verify your email</h1>'
+        '<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#52605b">'
+        'Enter this code to start a support conversation.</p>'
+        f'<p style="margin:0 0 24px;font-size:32px;font-weight:700;letter-spacing:8px">{safe_code}</p>'
+        '<p style="margin:0;font-size:12px;color:#7b8581">This code expires in 10 minutes. '
+        f'Tracking ID: {safe_tracking_id}</p>'
+        '</div></div>'
+    )
+    payload = {
+        "from": brand["from"],
+        "to": [recipient],
+        "subject": f"{code} is your {brand['name']} support code",
+        "text": (
+            f"Your {brand['name']} support verification code is {code}. "
+            f"It expires in 10 minutes. Tracking ID: {tracking_id}."
+        ),
+        "html": html,
+        "tags": [
+            {"name": "support_source", "value": source},
+            {"name": "purpose", "value": "email_verification"},
+        ],
+    }
+    result = _resend_request(
+        "POST",
+        "/emails",
+        json=payload,
+        idempotency_key=f"support-verify-{challenge_id}",
+    )
+    if not result.get("id"):
+        raise SupportEmailError("Resend did not return an email ID.")
+    return result["id"]
 
 
 def _send(ticket, *, recipient, title, body, idempotency_key):

@@ -1,6 +1,34 @@
 from rest_framework import serializers
 
 from ..models import PurchasedTemplate, TrackingSupportMessage, TrackingSupportReply
+from ..utils.support_verification import SupportVerificationError, read_email_verification_grant
+
+
+def resolve_tracking_document(tracking_id):
+    document = PurchasedTemplate.objects.filter(tracking_id=tracking_id).first()
+    if document is None:
+        document = PurchasedTemplate.objects.filter(tracking_id__iexact=tracking_id).first()
+    return document
+
+
+class SupportEmailVerificationRequestSerializer(serializers.Serializer):
+    tracking_id = serializers.CharField(max_length=100, trim_whitespace=True)
+    source = serializers.ChoiceField(choices=TrackingSupportMessage.Source.choices)
+    email = serializers.EmailField(max_length=254)
+
+    def validate_tracking_id(self, value):
+        document = resolve_tracking_document(value.strip())
+        if document is None:
+            raise serializers.ValidationError("We could not find a document with this tracking ID.")
+        return document.tracking_id
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+
+class SupportEmailVerificationConfirmSerializer(serializers.Serializer):
+    challenge_id = serializers.CharField(max_length=128, trim_whitespace=True)
+    code = serializers.RegexField(r"^\d{4}$")
 
 
 class PublicTrackingSupportSerializer(serializers.Serializer):
@@ -10,18 +38,33 @@ class PublicTrackingSupportSerializer(serializers.Serializer):
     customer_email = serializers.EmailField(max_length=254, required=False, allow_blank=True, default="")
     subject = serializers.CharField(max_length=160, trim_whitespace=True, required=False, default="Support conversation")
     message = serializers.CharField(max_length=5000, trim_whitespace=True, required=False, allow_blank=True, default="")
+    verification_token = serializers.CharField(write_only=True, trim_whitespace=True)
 
     def validate_tracking_id(self, value):
         tracking_id = value.strip()
-        document = PurchasedTemplate.objects.filter(tracking_id=tracking_id).first()
-        if document is None:
-            document = PurchasedTemplate.objects.filter(tracking_id__iexact=tracking_id).first()
+        document = resolve_tracking_document(tracking_id)
         if document is None:
             raise serializers.ValidationError("We could not find a document with this tracking ID.")
         self.context["document"] = document
         return document.tracking_id
 
+    def validate(self, attrs):
+        try:
+            grant = read_email_verification_grant(attrs["verification_token"])
+        except SupportVerificationError as exc:
+            raise serializers.ValidationError({"verification_token": str(exc)}) from exc
+
+        if grant["tracking_id"] != attrs["tracking_id"] or grant["source"] != attrs["source"]:
+            raise serializers.ValidationError({"verification_token": "Email verification does not match this tracking request."})
+
+        supplied_email = attrs.get("customer_email", "").strip().lower()
+        if supplied_email and supplied_email != grant["email"]:
+            raise serializers.ValidationError({"customer_email": "Use the email address that was verified."})
+        attrs["customer_email"] = grant["email"]
+        return attrs
+
     def create(self, validated_data):
+        validated_data.pop("verification_token", None)
         return TrackingSupportMessage.objects.create(
             document=self.context["document"],
             **validated_data,

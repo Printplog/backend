@@ -20,6 +20,8 @@ from .support import (
     PublicTrackingSupportThreadView,
     PublicTrackingSupportView,
     ResendWebhookView,
+    SupportEmailVerificationConfirmView,
+    SupportEmailVerificationRequestView,
     TrackingSupportMessageDetailView,
     TrackingSupportMessageListView,
     TrackingSupportReplyView,

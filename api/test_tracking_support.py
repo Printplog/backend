@@ -6,6 +6,7 @@ import time
 from unittest.mock import patch
 
 from django.test import override_settings
+from django.core import signing
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -13,6 +14,7 @@ from rest_framework.test import APITestCase
 from accounts.models import User
 from api.models import PurchasedTemplate, Template, Tool, TrackingSupportMessage, TrackingSupportReply
 from api.utils.support_email import process_inbound_email
+from api.utils.support_verification import SIGNING_SALT
 
 
 class TrackingSupportTests(APITestCase):
@@ -36,8 +38,31 @@ class TrackingSupportTests(APITestCase):
             "customer_email": "ada@example.com",
             "subject": "Delivery address",
             "message": "Please confirm the delivery address on this parcel.",
+            "verification_token": signing.dumps(
+                {
+                    "tracking_id": "PF-2048",
+                    "source": "parcel_finda",
+                    "email": "ada@example.com",
+                },
+                salt=SIGNING_SALT,
+                compress=True,
+            ),
             **overrides,
         }
+        if "verification_token" not in overrides and (
+            payload["tracking_id"] != "PF-2048"
+            or payload["source"] != "parcel_finda"
+            or payload["customer_email"] != "ada@example.com"
+        ):
+            payload["verification_token"] = signing.dumps(
+                {
+                    "tracking_id": payload["tracking_id"],
+                    "source": payload["source"],
+                    "email": payload["customer_email"],
+                },
+                salt=SIGNING_SALT,
+                compress=True,
+            )
         return self.client.post(reverse("tracking-support-create"), payload, format="json")
 
     def test_public_submission_is_attached_to_tracking_owner(self):
@@ -52,30 +77,62 @@ class TrackingSupportTests(APITestCase):
         self.assertNotEqual(support_message.customer_access_token_hash, response.data["access_token"])
         self.assertEqual(response.data["channel"], f"private-support-{support_message.id.hex}")
 
-    @patch("api.views.support.notify_owner_of_new_ticket")
-    def test_realtime_conversation_can_start_with_only_tracking_id(self, notify_owner):
+    def test_public_submission_requires_verified_email(self):
         response = self.client.post(
             reverse("tracking-support-create"),
             {"tracking_id": "PF-2048", "source": "parcel_finda"},
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        ticket = TrackingSupportMessage.objects.get()
-        self.assertEqual(ticket.customer_name, "Website visitor")
-        self.assertEqual(ticket.customer_email, "")
-        self.assertEqual(ticket.subject, "Support conversation")
-        self.assertEqual(ticket.message, "")
-        notify_owner.assert_not_called()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("verification_token", response.data)
+        self.assertFalse(TrackingSupportMessage.objects.exists())
 
-        thread = self.client.get(
-            reverse("tracking-support-public-thread", args=[ticket.id]),
-            HTTP_X_SUPPORT_TOKEN=response.data["access_token"],
+    @patch("api.utils.support_verification.secrets.randbelow", return_value=1234)
+    @patch("api.utils.support_verification.send_support_verification_code")
+    def test_email_verification_allows_support_conversation(self, send_code, _randbelow):
+        requested = self.client.post(
+            reverse("tracking-support-email-request"),
+            {"tracking_id": "PF-2048", "source": "parcel_finda", "email": "Ada@Example.com"},
+            format="json",
         )
-        self.assertEqual(thread.status_code, status.HTTP_200_OK)
-        self.assertEqual(thread.data["conversation"], [])
-        self.assertEqual(thread.data["channel"], response.data["channel"])
-        self.assertIn("realtime", thread.data)
+        self.assertEqual(requested.status_code, status.HTTP_200_OK)
+        send_code.assert_called_once()
+
+        confirmed = self.client.post(
+            reverse("tracking-support-email-confirm"),
+            {"challenge_id": requested.data["challenge_id"], "code": "1234"},
+            format="json",
+        )
+        self.assertEqual(confirmed.status_code, status.HTTP_200_OK)
+
+        created = self.client.post(
+            reverse("tracking-support-create"),
+            {
+                "tracking_id": "PF-2048",
+                "source": "parcel_finda",
+                "verification_token": confirmed.data["verification_token"],
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(TrackingSupportMessage.objects.get().customer_email, "ada@example.com")
+
+    @patch("api.utils.support_verification.secrets.randbelow", return_value=1234)
+    @patch("api.utils.support_verification.send_support_verification_code")
+    def test_email_verification_rejects_wrong_code(self, _send_code, _randbelow):
+        requested = self.client.post(
+            reverse("tracking-support-email-request"),
+            {"tracking_id": "PF-2048", "source": "parcel_finda", "email": "ada@example.com"},
+            format="json",
+        )
+        response = self.client.post(
+            reverse("tracking-support-email-confirm"),
+            {"challenge_id": requested.data["challenge_id"], "code": "0000"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("incorrect", response.data["detail"].lower())
 
     def test_customer_token_controls_conversation_access(self):
         created = self.submit()
@@ -253,28 +310,6 @@ class TrackingSupportTests(APITestCase):
         conversation = list_response.data["results"][0]["conversation"]
         self.assertEqual([entry["direction"] for entry in conversation], ["customer", "owner"])
         self.assertEqual(conversation[1]["body"], "The address is correct.")
-
-    @patch("api.views.support.send_owner_reply")
-    def test_owner_replies_live_when_customer_did_not_provide_email(self, send_owner_reply):
-        self.client.post(
-            reverse("tracking-support-create"),
-            {"tracking_id": "PF-2048", "source": "parcel_finda"},
-            format="json",
-        )
-        support_message = TrackingSupportMessage.objects.get()
-        self.client.force_authenticate(user=self.owner)
-
-        response = self.client.post(
-            reverse("tracking-support-reply", args=[support_message.id]),
-            {"body": "How can I help?"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        reply = TrackingSupportReply.objects.get()
-        self.assertEqual(reply.delivery_status, TrackingSupportReply.DeliveryStatus.RECEIVED)
-        self.assertIsNone(reply.resend_email_id)
-        send_owner_reply.assert_not_called()
 
     @patch("api.views.support.send_owner_reply", return_value="resend-email-2")
     def test_other_user_cannot_reply(self, send_owner_reply):

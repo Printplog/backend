@@ -492,6 +492,7 @@ REST_FRAMEWORK = {
         'wallet_write':  os.getenv('THROTTLE_WALLET_WRITE',  '20/min' if IS_PRODUCTION else '120/min'),
         'analytics_ingest': os.getenv('THROTTLE_ANALYTICS_INGEST', '120/min' if IS_PRODUCTION else '1000/min'),
         'tracking_support': os.getenv('THROTTLE_TRACKING_SUPPORT', '8/hour' if IS_PRODUCTION else '120/min'),
+        'support_verification': os.getenv('THROTTLE_SUPPORT_VERIFICATION', '20/hour' if IS_PRODUCTION else '240/min'),
         'admin_read':    os.getenv('THROTTLE_ADMIN_READ',    '600/min' if IS_PRODUCTION else '2000/min'),
         'admin_2fa':     os.getenv('THROTTLE_ADMIN_2FA',     '10/min' if IS_PRODUCTION else '120/min'),
     },
