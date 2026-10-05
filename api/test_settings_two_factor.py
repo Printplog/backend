@@ -189,6 +189,37 @@ class SiteSettingsTwoFactorTests(TestCase):
         self.assertNotIn("resend_api_key", response.data)
         self.assertTrue(response.data["resend_api_key_configured"])
 
+    def test_admin_can_store_pusher_credentials_without_exposing_them(self):
+        credentials = {
+            "pusher_app_id": "2087654",
+            "pusher_key": "public_key_123",
+            "pusher_secret": "private_secret_456",
+            "pusher_cluster": "eu",
+        }
+
+        response = self.client.patch(
+            self.url,
+            {
+                **credentials,
+                "two_factor_code": pyotp.TOTP(self.secret).now(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for field_name, value in credentials.items():
+            self.assertNotContains(response, value)
+            self.assertNotIn(field_name, response.data)
+            self.assertTrue(response.data[f"{field_name}_configured"])
+            self.assertEqual(get_integration_secret(field_name), value)
+
+        audit_details = AuditLog.objects.get(action="UPDATE_SETTINGS").details
+        self.assertEqual(
+            audit_details["integration_secrets_updated"],
+            sorted(credentials),
+        )
+        self.assertNotIn(credentials["pusher_secret"], str(audit_details))
+
     def test_blank_secret_input_keeps_existing_secret(self):
         initial_key = "re_test_keep_existing_value"
         first_code = pyotp.TOTP(self.secret).now()

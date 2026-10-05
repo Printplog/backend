@@ -6,10 +6,10 @@ from ..models import PurchasedTemplate, TrackingSupportMessage, TrackingSupportR
 class PublicTrackingSupportSerializer(serializers.Serializer):
     tracking_id = serializers.CharField(max_length=100, trim_whitespace=True)
     source = serializers.ChoiceField(choices=TrackingSupportMessage.Source.choices)
-    customer_name = serializers.CharField(max_length=120, trim_whitespace=True)
-    customer_email = serializers.EmailField(max_length=254)
-    subject = serializers.CharField(max_length=160, trim_whitespace=True)
-    message = serializers.CharField(max_length=5000, trim_whitespace=True)
+    customer_name = serializers.CharField(max_length=120, trim_whitespace=True, required=False, default="Website visitor")
+    customer_email = serializers.EmailField(max_length=254, required=False, allow_blank=True, default="")
+    subject = serializers.CharField(max_length=160, trim_whitespace=True, required=False, default="Support conversation")
+    message = serializers.CharField(max_length=5000, trim_whitespace=True, required=False, allow_blank=True, default="")
 
     def validate_tracking_id(self, value):
         tracking_id = value.strip()
@@ -35,16 +35,18 @@ class TrackingSupportMessageSerializer(serializers.ModelSerializer):
     conversation = serializers.SerializerMethodField()
 
     def get_conversation(self, obj):
-        initial = {
-            "id": f"initial-{obj.id}",
-            "direction": TrackingSupportReply.Direction.CUSTOMER,
-            "body": obj.message,
-            "sender_email": obj.customer_email,
-            "delivery_status": TrackingSupportReply.DeliveryStatus.RECEIVED,
-            "created_at": obj.created_at,
-        }
+        initial = []
+        if obj.message:
+            initial.append({
+                "id": f"initial-{obj.id}",
+                "direction": TrackingSupportReply.Direction.CUSTOMER,
+                "body": obj.message,
+                "sender_email": obj.customer_email,
+                "delivery_status": TrackingSupportReply.DeliveryStatus.RECEIVED,
+                "created_at": obj.created_at,
+            })
         replies = TrackingSupportReplySerializer(obj.replies.all(), many=True).data
-        return [initial, *replies]
+        return [*initial, *replies]
 
     class Meta:
         model = TrackingSupportMessage
@@ -89,3 +91,41 @@ class TrackingSupportReplySerializer(serializers.ModelSerializer):
 
 class TrackingSupportReplyCreateSerializer(serializers.Serializer):
     body = serializers.CharField(max_length=10000, trim_whitespace=True)
+
+
+class PublicTrackingSupportThreadSerializer(serializers.ModelSerializer):
+    conversation = serializers.SerializerMethodField()
+
+    def get_conversation(self, obj):
+        entries = []
+        if obj.message:
+            entries.append({
+                "id": f"initial-{obj.id}",
+                "direction": TrackingSupportReply.Direction.CUSTOMER,
+                "body": obj.message,
+                "delivery_status": TrackingSupportReply.DeliveryStatus.RECEIVED,
+                "created_at": obj.created_at,
+            })
+        entries.extend(
+            {
+                "id": str(reply.id),
+                "direction": reply.direction,
+                "body": reply.body,
+                "delivery_status": reply.delivery_status,
+                "created_at": reply.created_at,
+            }
+            for reply in obj.replies.all()
+        )
+        return entries
+
+    class Meta:
+        model = TrackingSupportMessage
+        fields = [
+            "id",
+            "tracking_id",
+            "customer_name",
+            "subject",
+            "status",
+            "conversation",
+        ]
+        read_only_fields = fields

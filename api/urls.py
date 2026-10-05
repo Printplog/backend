@@ -7,7 +7,10 @@ from .views import (
     WalletStatsView, WalletListView, WalletAdjustView, PendingRequestsView, ApproveRequestView, RejectRequestView, TransactionHistoryView,
     PayoutListView, PayoutApproveView, PayoutRejectView,
     AiChatView, AiChatSessionViewSet, ContactView,
-    PublicTrackingSupportView, ResendWebhookView, TrackingSupportMessageDetailView, TrackingSupportMessageListView, TrackingSupportReplyView,
+    OwnerSupportRealtimeAuthView, PublicSupportRealtimeAuthView,
+    PublicTrackingSupportReplyView, PublicTrackingSupportThreadView,
+    PublicTrackingSupportView, ResendWebhookView, TrackingSupportMessageDetailView,
+    TrackingSupportMessageListView, TrackingSupportReplyView,
 )
 from django.urls import path
 from django.urls import include
@@ -52,7 +55,11 @@ urlpatterns = [
     path("ai-chat/", AiChatView.as_view(), name="ai-chat"),
     path("contact/", ContactView.as_view(), name="contact"),
     path("tracking-support/", PublicTrackingSupportView.as_view(), name="tracking-support-create"),
+    path("tracking-support/<uuid:message_id>/", PublicTrackingSupportThreadView.as_view(), name="tracking-support-public-thread"),
+    path("tracking-support/<uuid:message_id>/replies/", PublicTrackingSupportReplyView.as_view(), name="tracking-support-public-reply"),
+    path("tracking-support/<uuid:message_id>/realtime-auth/", PublicSupportRealtimeAuthView.as_view(), name="tracking-support-public-realtime-auth"),
     path("support/messages/", TrackingSupportMessageListView.as_view(), name="tracking-support-list"),
+    path("support/realtime-auth/", OwnerSupportRealtimeAuthView.as_view(), name="tracking-support-owner-realtime-auth"),
     path("support/messages/<uuid:message_id>/", TrackingSupportMessageDetailView.as_view(), name="tracking-support-detail"),
     path("support/messages/<uuid:message_id>/replies/", TrackingSupportReplyView.as_view(), name="tracking-support-reply"),
     path("webhooks/resend/", ResendWebhookView.as_view(), name="resend-webhook"),

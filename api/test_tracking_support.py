@@ -48,6 +48,126 @@ class TrackingSupportTests(APITestCase):
         self.assertEqual(support_message.document, self.document)
         self.assertEqual(support_message.document.buyer, self.owner)
         self.assertEqual(support_message.status, TrackingSupportMessage.Status.NEW)
+        self.assertTrue(response.data["access_token"])
+        self.assertNotEqual(support_message.customer_access_token_hash, response.data["access_token"])
+        self.assertEqual(response.data["channel"], f"private-support-{support_message.id.hex}")
+
+    @patch("api.views.support.notify_owner_of_new_ticket")
+    def test_realtime_conversation_can_start_with_only_tracking_id(self, notify_owner):
+        response = self.client.post(
+            reverse("tracking-support-create"),
+            {"tracking_id": "PF-2048", "source": "parcel_finda"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        ticket = TrackingSupportMessage.objects.get()
+        self.assertEqual(ticket.customer_name, "Website visitor")
+        self.assertEqual(ticket.customer_email, "")
+        self.assertEqual(ticket.subject, "Support conversation")
+        self.assertEqual(ticket.message, "")
+        notify_owner.assert_not_called()
+
+        thread = self.client.get(
+            reverse("tracking-support-public-thread", args=[ticket.id]),
+            HTTP_X_SUPPORT_TOKEN=response.data["access_token"],
+        )
+        self.assertEqual(thread.status_code, status.HTTP_200_OK)
+        self.assertEqual(thread.data["conversation"], [])
+
+    def test_customer_token_controls_conversation_access(self):
+        created = self.submit()
+        ticket = TrackingSupportMessage.objects.get()
+        url = reverse("tracking-support-public-thread", args=[ticket.id])
+
+        missing = self.client.get(url)
+        wrong = self.client.get(url, HTTP_X_SUPPORT_TOKEN="wrong-token")
+        allowed = self.client.get(url, HTTP_X_SUPPORT_TOKEN=created.data["access_token"])
+
+        self.assertEqual(missing.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(wrong.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+        self.assertEqual(allowed.data["conversation"][0]["body"], ticket.message)
+        self.assertNotIn("customer_email", allowed.data)
+        self.assertNotIn("sender_email", allowed.data["conversation"][0])
+
+    @patch("api.views.support.publish_support_update")
+    def test_customer_can_continue_conversation_with_ticket_token(self, publish_update):
+        created = self.submit()
+        ticket = TrackingSupportMessage.objects.get()
+        publish_update.reset_mock()
+
+        response = self.client.post(
+            reverse("tracking-support-public-reply", args=[ticket.id]),
+            {"body": "I have another delivery question."},
+            format="json",
+            HTTP_X_SUPPORT_TOKEN=created.data["access_token"],
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        reply = TrackingSupportReply.objects.get()
+        self.assertEqual(reply.direction, TrackingSupportReply.Direction.CUSTOMER)
+        self.assertEqual(reply.sender_email, ticket.customer_email)
+        publish_update.assert_called_once()
+
+    @override_settings(
+        PUSHER_APP_ID="12345",
+        PUSHER_KEY="public-key",
+        PUSHER_SECRET="private-secret",
+        PUSHER_CLUSTER="eu",
+        RESEND_API_KEY="",
+    )
+    @patch("api.utils.support_realtime.requests.post")
+    def test_realtime_private_channels_are_signed_and_payloads_are_minimal(self, pusher_post):
+        pusher_post.return_value.raise_for_status.return_value = None
+        created = self.submit()
+        ticket = TrackingSupportMessage.objects.get()
+
+        auth = self.client.post(
+            reverse("tracking-support-public-realtime-auth", args=[ticket.id]),
+            {
+                "socket_id": "123.456",
+                "channel_name": created.data["channel"],
+            },
+            format="json",
+            HTTP_X_SUPPORT_TOKEN=created.data["access_token"],
+        )
+
+        expected_signature = hmac.new(
+            b"private-secret",
+            f"123.456:{created.data['channel']}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(auth.status_code, status.HTTP_200_OK)
+        self.assertEqual(auth.data["auth"], f"public-key:{expected_signature}")
+        self.assertTrue(created.data["realtime"]["enabled"])
+        published_body = pusher_post.call_args.kwargs["data"]
+        self.assertIn(str(ticket.id), published_body)
+        self.assertNotIn(ticket.message, published_body)
+
+    @override_settings(
+        PUSHER_APP_ID="12345",
+        PUSHER_KEY="public-key",
+        PUSHER_SECRET="private-secret",
+        PUSHER_CLUSTER="eu",
+    )
+    def test_owner_realtime_auth_is_limited_to_their_channel(self):
+        self.client.force_authenticate(user=self.owner)
+        own_channel = f"private-support-owner-{self.owner.id}"
+
+        allowed = self.client.post(
+            reverse("tracking-support-owner-realtime-auth"),
+            {"socket_id": "123.456", "channel_name": own_channel},
+            format="json",
+        )
+        denied = self.client.post(
+            reverse("tracking-support-owner-realtime-auth"),
+            {"socket_id": "123.456", "channel_name": f"private-support-owner-{self.other.id}"},
+            format="json",
+        )
+
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_public_submission_rejects_unknown_tracking_id(self):
         response = self.submit(tracking_id="UNKNOWN")
@@ -131,6 +251,28 @@ class TrackingSupportTests(APITestCase):
         conversation = list_response.data["results"][0]["conversation"]
         self.assertEqual([entry["direction"] for entry in conversation], ["customer", "owner"])
         self.assertEqual(conversation[1]["body"], "The address is correct.")
+
+    @patch("api.views.support.send_owner_reply")
+    def test_owner_replies_live_when_customer_did_not_provide_email(self, send_owner_reply):
+        self.client.post(
+            reverse("tracking-support-create"),
+            {"tracking_id": "PF-2048", "source": "parcel_finda"},
+            format="json",
+        )
+        support_message = TrackingSupportMessage.objects.get()
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            reverse("tracking-support-reply", args=[support_message.id]),
+            {"body": "How can I help?"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        reply = TrackingSupportReply.objects.get()
+        self.assertEqual(reply.delivery_status, TrackingSupportReply.DeliveryStatus.RECEIVED)
+        self.assertIsNone(reply.resend_email_id)
+        send_owner_reply.assert_not_called()
 
     @patch("api.views.support.send_owner_reply", return_value="resend-email-2")
     def test_other_user_cannot_reply(self, send_owner_reply):

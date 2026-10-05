@@ -296,6 +296,7 @@ class TrackingSupportMessage(models.Model):
     customer_email = models.EmailField(max_length=254)
     subject = models.CharField(max_length=160)
     message = models.TextField(max_length=5000)
+    customer_access_token_hash = models.CharField(max_length=64, blank=True, default="")
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.NEW)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

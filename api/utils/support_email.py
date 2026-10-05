@@ -13,6 +13,7 @@ from django.utils.html import escape, strip_tags
 
 from api.models import TrackingSupportMessage, TrackingSupportReply
 from api.utils.integration_secrets import get_integration_secret
+from api.utils.support_realtime import publish_support_update
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,7 @@ def process_inbound_email(data):
         )
         ticket.status = TrackingSupportMessage.Status.NEW
         ticket.save(update_fields=["status", "updated_at"])
+        publish_support_update(ticket)
         return "customer_reply"
 
     if sender == owner_email:
@@ -239,6 +241,7 @@ def process_inbound_email(data):
         if ticket.status == TrackingSupportMessage.Status.NEW:
             ticket.status = TrackingSupportMessage.Status.READ
         ticket.save(update_fields=["status", "updated_at"])
+        publish_support_update(ticket)
         return "owner_reply"
 
     logger.warning("Ignoring support reply for ticket %s from an unknown sender", ticket.id)
@@ -261,4 +264,12 @@ def update_delivery_status(event_type, data):
     delivery_status = status_map.get(event_type)
     if not delivery_status:
         return False
-    return bool(TrackingSupportReply.objects.filter(resend_email_id=email_id).update(delivery_status=delivery_status))
+    reply = TrackingSupportReply.objects.select_related("support_message__document__buyer").filter(
+        resend_email_id=email_id,
+    ).first()
+    if reply is None:
+        return False
+    reply.delivery_status = delivery_status
+    reply.save(update_fields=["delivery_status"])
+    publish_support_update(reply.support_message)
+    return True

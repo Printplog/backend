@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import re
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
@@ -21,6 +22,30 @@ SECRET_FIELDS = {
         "storage_key": "resend.webhook_secret",
         "environment_setting": "RESEND_WEBHOOK_SECRET",
         "prefix": "whsec_",
+    },
+    "pusher_app_id": {
+        "storage_key": "pusher.app_id",
+        "environment_setting": "PUSHER_APP_ID",
+        "pattern": r"^[A-Za-z0-9_-]+$",
+        "error": "Pusher app ID contains unsupported characters.",
+    },
+    "pusher_key": {
+        "storage_key": "pusher.key",
+        "environment_setting": "PUSHER_KEY",
+        "pattern": r"^[A-Za-z0-9_-]+$",
+        "error": "Pusher key contains unsupported characters.",
+    },
+    "pusher_secret": {
+        "storage_key": "pusher.secret",
+        "environment_setting": "PUSHER_SECRET",
+        "pattern": r"^[A-Za-z0-9_-]+$",
+        "error": "Pusher secret contains unsupported characters.",
+    },
+    "pusher_cluster": {
+        "storage_key": "pusher.cluster",
+        "environment_setting": "PUSHER_CLUSTER",
+        "pattern": r"^[a-z0-9-]+$",
+        "error": "Pusher cluster contains unsupported characters.",
     },
 }
 
@@ -49,8 +74,12 @@ def validate_integration_secret(field_name, value):
     if definition is None:
         raise IntegrationSecretError("Unsupported integration secret.")
     normalized = str(value).strip()
-    if not normalized.startswith(definition["prefix"]):
-        raise IntegrationSecretError(f"{field_name} must begin with {definition['prefix']}.")
+    prefix = definition.get("prefix")
+    if prefix and not normalized.startswith(prefix):
+        raise IntegrationSecretError(f"{field_name} must begin with {prefix}.")
+    pattern = definition.get("pattern")
+    if pattern and not re.fullmatch(pattern, normalized):
+        raise IntegrationSecretError(definition["error"])
     return normalized
 
 

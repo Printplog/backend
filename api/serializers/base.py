@@ -83,6 +83,10 @@ class FontSerializer(serializers.ModelSerializer):
 class SiteSettingsSerializer(serializers.ModelSerializer):
     resend_api_key_configured = serializers.SerializerMethodField()
     resend_webhook_secret_configured = serializers.SerializerMethodField()
+    pusher_app_id_configured = serializers.SerializerMethodField()
+    pusher_key_configured = serializers.SerializerMethodField()
+    pusher_secret_configured = serializers.SerializerMethodField()
+    pusher_cluster_configured = serializers.SerializerMethodField()
 
     def get_resend_api_key_configured(self, obj):
         from ..utils.integration_secrets import integration_secret_status
@@ -93,6 +97,26 @@ class SiteSettingsSerializer(serializers.ModelSerializer):
         from ..utils.integration_secrets import integration_secret_status
 
         return integration_secret_status("resend_webhook_secret")["configured"]
+
+    def get_pusher_app_id_configured(self, obj):
+        from ..utils.integration_secrets import integration_secret_status
+
+        return integration_secret_status("pusher_app_id")["configured"]
+
+    def get_pusher_key_configured(self, obj):
+        from ..utils.integration_secrets import integration_secret_status
+
+        return integration_secret_status("pusher_key")["configured"]
+
+    def get_pusher_secret_configured(self, obj):
+        from ..utils.integration_secrets import integration_secret_status
+
+        return integration_secret_status("pusher_secret")["configured"]
+
+    def get_pusher_cluster_configured(self, obj):
+        from ..utils.integration_secrets import integration_secret_status
+
+        return integration_secret_status("pusher_cluster")["configured"]
 
     class Meta:
         model = SiteSettings

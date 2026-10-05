@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 from ..models import TrackingSupportMessage, TrackingSupportReply
 from ..serializers.support import (
     PublicTrackingSupportSerializer,
+    PublicTrackingSupportThreadSerializer,
     TrackingSupportReplyCreateSerializer,
     TrackingSupportReplySerializer,
     TrackingSupportMessageSerializer,
@@ -19,6 +20,7 @@ from ..serializers.support import (
 )
 from ..utils.support_email import (
     SupportEmailError,
+    notify_owner_of_customer_reply,
     notify_owner_of_new_ticket,
     process_inbound_email,
     send_owner_reply,
@@ -26,6 +28,15 @@ from ..utils.support_email import (
     verify_webhook,
 )
 from ..utils.integration_secrets import get_integration_secret
+from ..utils.support_realtime import (
+    authorize_private_channel,
+    create_customer_access_token,
+    customer_token_matches,
+    owner_channel,
+    public_realtime_config,
+    publish_support_update,
+    ticket_channel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +50,23 @@ class PublicTrackingSupportView(APIView):
     def post(self, request):
         serializer = PublicTrackingSupportSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        support_message = serializer.save()
-        if get_integration_secret("resend_api_key"):
+        customer_token, customer_token_hash = create_customer_access_token()
+        support_message = serializer.save(customer_access_token_hash=customer_token_hash)
+        if support_message.message and get_integration_secret("resend_api_key"):
             try:
                 notify_owner_of_new_ticket(support_message)
             except SupportEmailError:
                 # The ticket is already safely stored and visible in the
                 # dashboard. Do not make a temporary provider outage lose it.
                 logger.exception("Could not email owner for support ticket %s", support_message.id)
+        publish_support_update(support_message, event="support.created")
         return Response(
             {
                 "id": str(support_message.id),
                 "message": "Your support request has been received.",
+                "access_token": customer_token,
+                "channel": ticket_channel(support_message.id),
+                "realtime": public_realtime_config(),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -75,6 +91,8 @@ class TrackingSupportMessageListView(APIView):
         return Response({
             "results": TrackingSupportMessageSerializer(messages, many=True).data,
             "unread_count": messages.filter(status=TrackingSupportMessage.Status.NEW).count(),
+            "channel": owner_channel(request.user.id),
+            "realtime": public_realtime_config(),
         })
 
 
@@ -94,6 +112,7 @@ class TrackingSupportMessageDetailView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        publish_support_update(support_message)
         return Response(TrackingSupportMessageSerializer(support_message).data)
 
 
@@ -109,14 +128,18 @@ class TrackingSupportReplyView(APIView):
         serializer = TrackingSupportReplyCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         reply_id = uuid.uuid4()
-        try:
-            resend_email_id = send_owner_reply(
-                support_message,
-                serializer.validated_data["body"],
-                idempotency_key=f"support-dashboard-{reply_id.hex}",
-            )
-        except SupportEmailError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        resend_email_id = None
+        delivery_status = TrackingSupportReply.DeliveryStatus.RECEIVED
+        if support_message.customer_email:
+            try:
+                resend_email_id = send_owner_reply(
+                    support_message,
+                    serializer.validated_data["body"],
+                    idempotency_key=f"support-dashboard-{reply_id.hex}",
+                )
+                delivery_status = TrackingSupportReply.DeliveryStatus.QUEUED
+            except SupportEmailError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         reply = TrackingSupportReply.objects.create(
             id=reply_id,
@@ -124,13 +147,113 @@ class TrackingSupportReplyView(APIView):
             direction=TrackingSupportReply.Direction.OWNER,
             body=serializer.validated_data["body"],
             sender_email=request.user.email,
-            delivery_status=TrackingSupportReply.DeliveryStatus.QUEUED,
+            delivery_status=delivery_status,
             resend_email_id=resend_email_id,
         )
         if support_message.status == TrackingSupportMessage.Status.NEW:
             support_message.status = TrackingSupportMessage.Status.READ
         support_message.save(update_fields=["status", "updated_at"])
+        publish_support_update(support_message)
         return Response(TrackingSupportReplySerializer(reply).data, status=status.HTTP_201_CREATED)
+
+
+def _customer_ticket(request, message_id):
+    ticket = get_object_or_404(
+        TrackingSupportMessage.objects.select_related("document__buyer").prefetch_related("replies"),
+        id=message_id,
+    )
+    if not customer_token_matches(ticket, request.headers.get("X-Support-Token", "")):
+        # Keep unauthorized and unknown conversations indistinguishable.
+        raise TrackingSupportMessage.DoesNotExist
+    return ticket
+
+
+class PublicTrackingSupportThreadView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "tracking_support"
+
+    def get(self, request, message_id):
+        try:
+            ticket = _customer_ticket(request, message_id)
+        except TrackingSupportMessage.DoesNotExist:
+            return Response({"detail": "Conversation not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(PublicTrackingSupportThreadSerializer(ticket).data)
+
+
+class PublicTrackingSupportReplyView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "tracking_support"
+
+    def post(self, request, message_id):
+        try:
+            ticket = _customer_ticket(request, message_id)
+        except TrackingSupportMessage.DoesNotExist:
+            return Response({"detail": "Conversation not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = TrackingSupportReplyCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reply = TrackingSupportReply.objects.create(
+            support_message=ticket,
+            direction=TrackingSupportReply.Direction.CUSTOMER,
+            body=serializer.validated_data["body"],
+            sender_email=ticket.customer_email,
+            delivery_status=TrackingSupportReply.DeliveryStatus.RECEIVED,
+        )
+        if get_integration_secret("resend_api_key"):
+            try:
+                reply.resend_email_id = notify_owner_of_customer_reply(
+                    ticket,
+                    reply.body,
+                    idempotency_key=f"support-widget-owner-{reply.id.hex}",
+                )
+                reply.delivery_status = TrackingSupportReply.DeliveryStatus.QUEUED
+            except SupportEmailError:
+                reply.delivery_status = TrackingSupportReply.DeliveryStatus.FAILED
+                logger.exception("Could not email owner for customer reply %s", reply.id)
+            reply.save(update_fields=["resend_email_id", "delivery_status"])
+        ticket.status = TrackingSupportMessage.Status.NEW
+        ticket.save(update_fields=["status", "updated_at"])
+        publish_support_update(ticket)
+        return Response(TrackingSupportReplySerializer(reply).data, status=status.HTTP_201_CREATED)
+
+
+class PublicSupportRealtimeAuthView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "tracking_support"
+
+    def post(self, request, message_id):
+        try:
+            ticket = _customer_ticket(request, message_id)
+        except TrackingSupportMessage.DoesNotExist:
+            return Response({"detail": "Conversation not found."}, status=status.HTTP_404_NOT_FOUND)
+        channel_name = str(request.data.get("channel_name", ""))
+        socket_id = str(request.data.get("socket_id", ""))
+        if channel_name != ticket_channel(ticket.id) or not socket_id:
+            return Response({"detail": "Invalid realtime channel."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            return Response(authorize_private_channel(socket_id, channel_name))
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class OwnerSupportRealtimeAuthView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        channel_name = str(request.data.get("channel_name", ""))
+        socket_id = str(request.data.get("socket_id", ""))
+        if channel_name != owner_channel(request.user.id) or not socket_id:
+            return Response({"detail": "Invalid realtime channel."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            return Response(authorize_private_channel(socket_id, channel_name))
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
 class ResendWebhookView(APIView):

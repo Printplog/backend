@@ -106,6 +106,46 @@ other person, and stored in the dashboard conversation. Webhook requests are
 verified against the raw request body and duplicate received emails are
 ignored.
 
+## Pusher realtime tracking support
+
+The support dashboard, ParcelFinda, and MyFlightLookup can update active
+conversations without polling. PostgreSQL remains the source of truth: Pusher
+events contain only the ticket ID and update time, and authorized clients
+refetch the conversation from the API. Resend continues to deliver email and
+acts as the fallback when realtime is unavailable.
+
+Create a Channels app in Pusher, then enter its **App ID**, **Key**, **Secret**,
+and **Cluster** in **Admin → Site Settings → Integrations**. These values are
+stored in the same encrypted, write-only registry as the Resend credentials.
+The browser receives only the public Pusher key and cluster; the app ID and
+secret never leave the backend.
+
+The following environment variables remain available as bootstrap fallbacks:
+
+```text
+PUSHER_APP_ID=...
+PUSHER_KEY=...
+PUSHER_SECRET=...
+PUSHER_CLUSTER=eu
+```
+
+Customer channels are private. On first contact the API returns a random
+ticket access token once; the tracking site stores it locally and sends it in
+the `X-Support-Token` header when reading the thread, replying, or authorizing
+its Pusher channel. Only the authenticated document owner can authorize the
+separate dashboard channel. A token grants access to one ticket only and is
+stored server-side as an HMAC hash.
+
+The floating widgets require only a valid tracking ID. They open an anonymous
+realtime conversation and collect the actual question in the chat composer.
+When no customer email is attached, owner replies are stored and delivered
+through the private channel instead of being sent through Resend. The full
+contact forms may still collect an email and retain bidirectional email
+fallback for customers who use them.
+
+Pusher is optional. Until all four values are configured, the APIs advertise
+realtime as disabled and the UI keeps the existing email conversation flow.
+
 ## Direct BNB Chain payment gateway
 
 The wallet app can receive and distribute USDT directly on BNB Smart Chain.
