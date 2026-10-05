@@ -36,7 +36,7 @@ THEME_DEFAULTS = {
     "fontFamily": "Inter",
     "buttonText": "Create document",
     "appearance": "dark",
-    "showSharpToolzBranding": True,
+    "showSharpToolzBranding": False,
 }
 
 _THEME_KEYS = frozenset(THEME_DEFAULTS)

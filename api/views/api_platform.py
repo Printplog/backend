@@ -797,7 +797,7 @@ def _validate_session_payload(data, api_key, user):
     if preview_mode not in {"standard", "protected"}:
         raise ValidationError({"preview_mode": "Choose standard or protected."})
     try:
-        theme = validate_theme(data.get("theme", customer_settings.theme or None))
+        theme = _resolve_session_theme(data, customer_settings)
     except ValueError as exc:
         raise ValidationError({"theme": str(exc)}) from exc
     return external_user_id.strip(), origin, mode, preview_mode, theme
@@ -822,10 +822,21 @@ def _validate_edit_session_payload(data, api_key, user):
     if preview_mode not in {"standard", "protected"}:
         raise ValidationError({"preview_mode": "Choose standard or protected."})
     try:
-        theme = validate_theme(data.get("theme", customer_settings.theme or None))
+        theme = _resolve_session_theme(data, customer_settings)
     except ValueError as exc:
         raise ValidationError({"theme": str(exc)}) from exc
     return origin, preview_mode, theme
+
+
+def _resolve_session_theme(data, customer_settings):
+    """Merge per-session styling over the customer's saved appearance."""
+    saved_theme = validate_theme(customer_settings.theme or None)
+    override = data.get("theme")
+    if override is None:
+        return saved_theme
+    if not isinstance(override, dict):
+        raise ValueError("theme must be an object.")
+    return validate_theme({**saved_theme, **override})
 
 
 def _embed_session_ttl(data):

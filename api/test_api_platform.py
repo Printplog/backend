@@ -15,6 +15,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from accounts.models import User
 from api.api_security import DEFAULT_API_KEY_SCOPES, generate_api_key
 from api.models import (
+    ApiCustomerSettings,
     ApiEntitlement,
     ApiKey,
     ApiUsageEvent,
@@ -97,6 +98,35 @@ class ApiPlatformSecurityTests(APITestCase):
 
     def api_credentials(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_embed_session_preserves_saved_branding_choice_with_partial_theme(self):
+        token, _ = self.issue_key()
+        ApiCustomerSettings.objects.update_or_create(
+            user=self.customer,
+            defaults={"theme": {"showSharpToolzBranding": False}},
+        )
+
+        created = self.create_embed_session(token, theme={"primaryColor": "#123456"})
+
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        theme = EmbedSession.objects.get(pk=created.data["id"]).theme
+        self.assertEqual(theme["primaryColor"], "#123456")
+        self.assertFalse(theme["showSharpToolzBranding"])
+
+    def test_embed_session_branding_is_opt_in(self):
+        token, _ = self.issue_key()
+
+        default_session = self.create_embed_session(token)
+        explicit_session = self.create_embed_session(
+            token,
+            external_user_id="end-user-2",
+            theme={"showSharpToolzBranding": True},
+        )
+
+        self.assertEqual(default_session.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(explicit_session.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(EmbedSession.objects.get(pk=default_session.data["id"]).theme["showSharpToolzBranding"])
+        self.assertTrue(EmbedSession.objects.get(pk=explicit_session.data["id"]).theme["showSharpToolzBranding"])
 
     def test_paid_activation_debits_wallet_once_and_records_price(self):
         first = self.activate()
@@ -529,6 +559,10 @@ class ApiPlatformSecurityTests(APITestCase):
 
     def test_edit_session_updates_only_editable_fields_without_charging_wallet(self):
         token, _ = self.issue_key()
+        ApiCustomerSettings.objects.update_or_create(
+            user=self.customer,
+            defaults={"theme": {"showSharpToolzBranding": False}},
+        )
         document = PurchasedTemplate.objects.create(
             buyer=self.customer,
             template=self.template,
@@ -549,6 +583,7 @@ class ApiPlatformSecurityTests(APITestCase):
             {
                 "origin": "https://customer.example",
                 "preview_mode": "standard",
+                "theme": {"primaryColor": "#123456"},
             },
             format="json",
         )
@@ -565,6 +600,8 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertEqual(loaded.data["operation"], "edit")
         self.assertEqual(loaded.data["document_name"], "Original name")
         self.assertEqual(loaded.data["prefill"]["Name"], "Jane")
+        self.assertEqual(loaded.data["theme"]["primaryColor"], "#123456")
+        self.assertFalse(loaded.data["theme"]["showSharpToolzBranding"])
 
         first = self.client.post(
             "/api/v1/embed/finalize",
