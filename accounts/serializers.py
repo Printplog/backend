@@ -40,6 +40,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "source_platform",
             "gclid",
             "fbclid",
+            "last_seen_update",
         )
 
 

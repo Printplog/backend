@@ -46,6 +46,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     gclid = models.CharField(max_length=500, null=True, blank=True, help_text="Google Click ID")
     fbclid = models.CharField(max_length=500, null=True, blank=True, help_text="Facebook Click ID")
     google_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    last_seen_update = models.CharField(max_length=50, blank=True, default="", help_text="Newest What's New release the user has dismissed")
 
 
     objects = UserManager()
