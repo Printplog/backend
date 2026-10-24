@@ -404,6 +404,26 @@ class ApiPlatformSecurityTests(APITestCase):
         self.assertEqual(self.wallet.balance, Decimal("100.00"))
         self.assertFalse(PurchasedTemplate.objects.get(pk=finalized.data["document_id"]).test)
 
+    def test_embed_document_is_named_after_the_person(self):
+        token, _ = self.issue_key()
+        names = []
+        for sent_name in ("My API Template", "Client chosen name"):
+            created = self.create_embed_session(token, mode="test")
+            embed_token = created.data["embed_url"].split("#", 1)[1]
+            self.client.credentials(
+                HTTP_AUTHORIZATION=f"Embed {embed_token}",
+                HTTP_X_EMBED_ORIGIN="https://customer.example",
+            )
+            finalized = self.client.post(
+                "/api/v1/embed/finalize",
+                {"values": {"Name": "Jane Doe", "Country": "ng"}, "name": sent_name},
+                format="json",
+            )
+            self.assertEqual(finalized.status_code, status.HTTP_201_CREATED)
+            names.append(PurchasedTemplate.objects.get(pk=finalized.data["document_id"]).name)
+        # The form's untouched "My <template>" is replaced; a real choice is kept
+        self.assertEqual(names, ["Jane Doe - API Template", "Client chosen name"])
+
     def test_api_tool_discount_percentage_is_validated(self):
         too_high = SiteSettingsSerializer(
             self.site,

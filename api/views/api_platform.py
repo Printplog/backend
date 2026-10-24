@@ -37,6 +37,7 @@ from api.api_security import (
 )
 from api.api_throttles import ApiKeyRateThrottle
 from api.document_compiler import apply_editable_updates, compile_document_fields
+from api.document_naming import default_document_name
 from api.models import (
     ApiCustomerSettings,
     ApiEntitlement,
@@ -1157,7 +1158,12 @@ class PublicEmbedFinalizeView(APIView):
             buyer=session.user,
             template=session.template,
             external_user_id=session.external_user_id,
-            name=name.strip() if isinstance(name, str) else f"My {session.template.name}",
+            # The embed form starts from "My <template>"; treat that as no name chosen
+            name=(
+                name.strip()
+                if isinstance(name, str) and name.strip() and name.strip() != f"My {session.template.name}"
+                else default_document_name(session.template, compiled_fields)
+            ),
             test=session.mode == EmbedSession.Mode.TEST,
             tracking_id=tracking_id,
             form_fields=compiled_fields,

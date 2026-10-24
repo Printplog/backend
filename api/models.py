@@ -252,16 +252,18 @@ class PurchasedTemplate(models.Model):
             self.svg_file.name = storage_path
         
         # 2. Inherit basic meta on first save
-        if not self.pk and self.template:
-            if not self.name:
-                self.name = f"My {self.template.name}"
+        # pk is a default UUID, so it's already set before the first save
+        if self._state.adding and self.template:
             if not self.svg_patches:
                 self.svg_patches = list(self.template.svg_patches)
             if not self.form_fields:
                 self.form_fields = list(self.template.form_fields)
+            if not self.name:
+                from api.document_naming import default_document_name
+                self.name = default_document_name(self.template, self.form_fields)
             if not self.keywords:
                 self.keywords = list(self.template.keywords)
-        elif not self.pk and not self.name:
+        elif self._state.adding and not self.name:
             self.name = "Untitled Document"
 
         super().save(*args, **kwargs)

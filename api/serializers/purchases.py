@@ -3,6 +3,7 @@ from ..models import PurchasedTemplate, Template
 from .base import FieldUpdateSerializer, FontSerializer
 from api.watermark import WaterMark
 from api.utils import get_signed_url
+from api.document_naming import default_document_name
 from decimal import Decimal
 import json
 
@@ -61,12 +62,6 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         instance = PurchasedTemplate(**validated_data)
         instance.buyer = self.context['request'].user
         
-        # 0. Set default name if missing
-        if not instance.name and instance.template:
-            instance.name = f"My {instance.template.name}"
-        elif not instance.name:
-            instance.name = "Untitled Document"
-        
         # FIGMA-STYLE INHERITANCE: Force inheritance before we process field_updates
         if instance.template:
             if not instance.svg_patches:
@@ -99,6 +94,10 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
                         field_map[update['id']]['barcodeImage'] = update['barcodeImage']
             instance.form_fields = list(field_map.values())
 
+        # Default name: the person on the document if there is one ("John Doe - Boarding Pass")
+        if not instance.name:
+            instance.name = default_document_name(instance.template, instance.form_fields)
+
         self.charge_if_test_false(instance, validated_data, is_update=False)
         instance.save()
         return instance
@@ -109,6 +108,11 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
         # 1. FIGMA-STYLE: Store field values in the JSON field instead of the SVG text
         field_updates = validated_data.pop("field_updates", None)
         if field_updates:
+            # Keep an auto-generated name in step with the person's name on the document
+            auto_names = {f"My {instance.template.name}"} if instance.template else set()
+            auto_names.add(default_document_name(instance.template, instance.form_fields or []))
+            keeps_auto_name = instance.name in auto_names and validated_data.get("name", instance.name) == instance.name
+
             current_fields = instance.form_fields or []
             field_map = {f['id']: f for f in current_fields}
             for update in field_updates:
@@ -122,7 +126,10 @@ class PurchasedTemplateSerializer(serializers.ModelSerializer):
                     if update.get('barcodeImage') is not None:
                         field_map[update['id']]['barcodeImage'] = update['barcodeImage']
             instance.form_fields = list(field_map.values())
-            instance.save(update_fields=['form_fields'])
+            if keeps_auto_name:
+                instance.name = default_document_name(instance.template, instance.form_fields)
+                validated_data.pop("name", None)
+            instance.save(update_fields=['form_fields', 'name'])
 
         # 2. Support Figma-style patches for layout edits
         svg_patch_data = validated_data.pop('svg_patch', None)
