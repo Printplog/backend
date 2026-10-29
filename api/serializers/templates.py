@@ -58,7 +58,7 @@ class TemplateSerializer(serializers.ModelSerializer):
         model = Template
         fields = [
             'id', 'name', 'banner', 'svg_file', 'svg_patches', 'form_fields', 
-            'type', 'tool', 'is_active', 'created_at', 'updated_at', 'hot', 
+            'type', 'tool', 'country', 'is_active', 'created_at', 'updated_at', 'hot', 
             'keywords', 'fonts', 'font_ids', 'tutorial', 'svg_url', 'tool_price', 
             'version', 'svg'
         ]
@@ -201,7 +201,7 @@ class AdminTemplateSerializer(serializers.ModelSerializer):
         model = Template
         fields = [
             'id', 'name', 'banner', 'svg_file', 'svg_patches', 'form_fields', 
-            'type', 'tool', 'is_active', 'created_at', 'updated_at', 'hot', 
+            'type', 'tool', 'country', 'is_active', 'created_at', 'updated_at', 'hot', 
             'keywords', 'fonts', 'font_ids', 'svg_url', 'tool_price', 
             'version', 'svg', 'svg_patch'
         ]

@@ -1,7 +1,7 @@
 from rest_framework.routers import DefaultRouter
 from .views import (
     TemplateViewSet, AdminTemplateViewSet, PublicTemplateTrackingView,
-    PurchasedTemplateViewSet, ToolViewSet, FontViewSet, SiteSettingsViewSet,
+    PurchasedTemplateViewSet, ToolViewSet, CountryViewSet, FontViewSet, SiteSettingsViewSet,
     TutorialViewSet, TransformVariableViewSet, ReferralViewSet,
     DownloadDoc, IncrementDownloads, RemoveBackgroundView, AdminOverview, AdminUsers, AdminUserDetails, AdminDocuments, AdminDocumentDetailView,
     WalletStatsView, WalletListView, WalletAdjustView, PendingRequestsView, ApproveRequestView, RejectRequestView, TransactionHistoryView,
@@ -31,6 +31,7 @@ def health_check(request):
 
 router = DefaultRouter()
 router.register(r'tools', ToolViewSet, basename='tool')
+router.register(r'countries', CountryViewSet, basename='country')
 router.register(r'templates', TemplateViewSet, basename='template')
 router.register(r'admin/templates', AdminTemplateViewSet, basename='admin-template')
 router.register(r'purchased-templates', PurchasedTemplateViewSet, basename='purchased-template')

@@ -28,7 +28,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOrReadOnly]
     pagination_class = ToolPagination
     filter_backends = [filters.SearchFilter]
-    search_fields = ['name', 'keywords', 'tool__name', 'tool__description']
+    search_fields = ['name', 'keywords', 'tool__name', 'tool__description', 'country__name']
 
     def get_queryset(self):
         queryset = Template.objects.select_related('tool', 'tool__tutorial', 'tutorial').prefetch_related('fonts')
@@ -43,6 +43,12 @@ class TemplateViewSet(viewsets.ModelViewSet):
         
         if tool_param:
             queryset = queryset.filter(tool__id=tool_param)
+
+        country_param = self.request.query_params.get("country")
+        if country_param == "none":
+            queryset = queryset.filter(country__isnull=True)
+        elif country_param:
+            queryset = queryset.filter(country__id=country_param)
         
         if self.action == 'list':
             queryset = queryset.defer('form_fields', 'svg_file')
@@ -111,7 +117,7 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOnly]
     pagination_class = ToolPagination
     filter_backends = [filters.SearchFilter]
-    search_fields = ['name', 'keywords', 'tool__name', 'tool__description']
+    search_fields = ['name', 'keywords', 'tool__name', 'tool__description', 'country__name']
     
     def get_queryset(self):
         queryset = Template.objects.select_related('tool', 'tool__tutorial', 'tutorial').prefetch_related('fonts')
@@ -126,6 +132,12 @@ class AdminTemplateViewSet(viewsets.ModelViewSet):
         
         if tool_param:
             queryset = queryset.filter(tool__id=tool_param)
+
+        country_param = self.request.query_params.get("country")
+        if country_param == "none":
+            queryset = queryset.filter(country__isnull=True)
+        elif country_param:
+            queryset = queryset.filter(country__id=country_param)
         
         if self.action == 'list':
             # Only defer in list view to keep the response small

@@ -1,6 +1,7 @@
 from .templates import TemplateViewSet, AdminTemplateViewSet, PublicTemplateTrackingView
 from .purchases import PurchasedTemplateViewSet
 from .tools import ToolViewSet
+from .countries import CountryViewSet
 from .fonts import FontViewSet
 from .tutorials import TutorialViewSet
 from .actions import DownloadDoc, IncrementDownloads, RemoveBackgroundView

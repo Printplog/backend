@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from ..models import Tool, Font, TransformVariable, SiteSettings, Tutorial
+from ..models import Country, Tool, Font, TransformVariable, SiteSettings, Tutorial
 from api.utils import get_signed_url
 
 class FieldUpdateSerializer(serializers.Serializer):
@@ -8,6 +8,25 @@ class FieldUpdateSerializer(serializers.Serializer):
     # Baked barcode PNG (single-source): the frontend encodes the barcode and
     # ships the finished image so the server-side render can inject it directly.
     barcodeImage = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+
+
+class CountrySerializer(serializers.ModelSerializer):
+    templates_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Country
+        fields = ['id', 'code', 'name', 'templates_count', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def validate_code(self, value):
+        code = (value or '').strip().upper()
+        if len(code) != 2 or not code.isascii() or not code.isalpha():
+            raise serializers.ValidationError('Use the 2-letter country code, e.g. US.')
+        return code
+
+    def get_templates_count(self, obj):
+        count = getattr(obj, 'templates_count', None)
+        return count if count is not None else obj.templates.count()
 
 
 class ToolSerializer(serializers.ModelSerializer):

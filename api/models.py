@@ -28,6 +28,20 @@ class Tool(models.Model):
     def __str__(self):
         return self.name
 
+class Country(models.Model):
+    """A country templates can be grouped under, e.g. USA for "USA Passport"."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=2, unique=True, help_text="ISO 3166-1 alpha-2 code, e.g. US")
+    name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name_plural = "Countries"
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
 class Template(models.Model):
     TEMPLATE_TYPE_CHOICES = [
         ('tool', 'Tool'),
@@ -48,6 +62,7 @@ class Template(models.Model):
     form_fields = models.JSONField(default=list, blank=True)
     type = models.CharField(max_length=20, choices=TEMPLATE_TYPE_CHOICES)
     tool = models.ForeignKey(Tool, on_delete=models.SET_NULL, null=True, blank=True, related_name='templates')
+    country = models.ForeignKey(Country, on_delete=models.SET_NULL, null=True, blank=True, related_name='templates')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
