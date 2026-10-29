@@ -12,10 +12,16 @@ class FieldUpdateSerializer(serializers.Serializer):
 
 class ToolSerializer(serializers.ModelSerializer):
     tutorial = serializers.SerializerMethodField()
+    templates_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Tool
         fields = '__all__'
+
+    def get_templates_count(self, obj):
+        # Annotated on list/detail; counted directly after create/update
+        count = getattr(obj, 'templates_count', None)
+        return count if count is not None else obj.templates.count()
 
     def get_tutorial(self, obj):
         # Plain dict instead of TutorialSerializer to avoid a circular import
