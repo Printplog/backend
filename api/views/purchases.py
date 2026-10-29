@@ -1,9 +1,13 @@
+import uuid
+
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q
-from ..models import PurchasedTemplate
+from ..document_naming import default_document_name
+from ..models import PurchasedTemplate, Template
 from ..serializers import PurchasedTemplateSerializer
 from ..permissions import IsOwnerOrAdmin
 
@@ -18,6 +22,21 @@ class PurchasedTemplateViewSet(viewsets.ModelViewSet):
     serializer_class = PurchasedTemplateSerializer
     permission_classes = [IsOwnerOrAdmin]
     pagination_class = DocumentPagination
+
+    @action(detail=False, methods=['post'], url_path='suggest-name', permission_classes=[IsAuthenticated])
+    def suggest_name(self, request):
+        """The default name a new document would get, e.g. "Jane Doe - USA Passport",
+        so the user can confirm or change it before creating."""
+        try:
+            template_id = uuid.UUID(str(request.data.get('template')))
+        except ValueError:
+            template_id = None
+        template = Template.objects.filter(id=template_id).only('id', 'name').first() if template_id else None
+        if template is None:
+            return Response({'error': 'Template not found.'}, status=status.HTTP_404_NOT_FOUND)
+        fields = request.data.get('fields')
+        fields = [f for f in fields if isinstance(f, dict)][:500] if isinstance(fields, list) else []
+        return Response({'name': default_document_name(template, fields)})
 
 
     def get_queryset(self):

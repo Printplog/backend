@@ -14,7 +14,7 @@ PERSON_ROLES = {
     "client", "recipient", "receiver", "consignee", "applicant", "student", "employee",
     "staff", "patient", "owner", "beneficiary", "traveller", "traveler", "guest", "buyer",
     "member", "candidate", "payee", "insured", "policyholder", "driver", "licensee",
-    "bearer", "tenant", "person", "full", "your", "my", "legal", "display", "of",
+    "bearer", "tenant", "person", "full", "your", "my", "legal", "display", "of", "fan",
 }
 
 # Name fields that describe something other than the document owner
