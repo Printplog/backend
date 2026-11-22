@@ -186,6 +186,16 @@ class PublicSiteSettingsSerializer(serializers.ModelSerializer):
             'enable_deposit_promo', 'deposit_promo_min_amount', 'deposit_promo_percentage',
             'deposit_promo_max_bonus', 'deposit_promo_expiry_days', 'deposit_promo_message',
             'enable_api_access', 'require_api_upgrade', 'api_upgrade_price',
-            'api_tool_discount_percentage'
+            'api_tool_discount_percentage', 'online_banking_url'
         ]
         read_only_fields = fields
+
+    def to_representation(self, instance):
+        import os
+
+        data = super().to_representation(instance)
+        if not (data.get('online_banking_url') or '').strip():
+            fallback = (os.getenv('FERNWAY_APP_URL') or '').strip().rstrip('/')
+            if fallback:
+                data['online_banking_url'] = fallback
+        return data

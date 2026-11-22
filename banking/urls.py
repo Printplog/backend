@@ -1,0 +1,81 @@
+from django.urls import path
+from .views import (
+    FernwayProfileListCreateView,
+    FernwayEmailVerificationRequestView,
+    FernwayEmailVerificationConfirmView,
+    FernwayProfileDetailView,
+    FernwayProfileUpgradeView,
+    FernwayProfileRenewView,
+    FernwayProfileResetView,
+    FernwayManageMetaView,
+    FernwayCreateAccountView,
+    FernwayAccountUpdateView,
+    FernwayTransactionView,
+    FernwayTransactionReviewView,
+    FernwayCardUpdateView,
+    FernwayClientAuthLoginView,
+    FernwayClientDataView,
+    FernwayClientTransferCreateView,
+    FernwayClientCardListCreateView,
+    FernwayClientCardDetailView,
+    FernwayClientSupportListCreateView,
+    FernwayClientSupportDetailView,
+    FernwayClientSupportReplyView,
+    FernwayClientSupportRealtimeAuthView,
+    FernwayAdminAccountListView,
+    FernwayAdminAccountDetailView,
+    FernwayAdminSettingsView,
+    FernwayAdminSubscriptionView,
+    FernwayAdminResetView,
+    FernwayAdminTransactionView,
+    FernwayAdminTransactionReviewView,
+)
+
+app_name = 'banking'
+
+urlpatterns = [
+    # Multi-account Online Banking Endpoints (each account has its own monthly subscription)
+    path('email-verification/request/', FernwayEmailVerificationRequestView.as_view(), name='email_verify_request'),
+    path('email-verification/confirm/', FernwayEmailVerificationConfirmView.as_view(), name='email_verify_confirm'),
+    path('accounts/', FernwayProfileListCreateView.as_view(), name='accounts_list_create'),
+    path('accounts/<uuid:profile_id>/', FernwayProfileDetailView.as_view(), name='account_detail'),
+    path('accounts/<uuid:profile_id>/upgrade/', FernwayProfileUpgradeView.as_view(), name='account_upgrade'),
+    path('accounts/<uuid:profile_id>/renew/', FernwayProfileRenewView.as_view(), name='account_renew'),
+    path('accounts/<uuid:profile_id>/reset/', FernwayProfileResetView.as_view(), name='account_reset'),
+    path('accounts/<uuid:profile_id>/transaction/', FernwayTransactionView.as_view(), name='account_tx_create'),
+    path('accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/', FernwayTransactionView.as_view(), name='account_tx_delete'),
+    path('accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/approve/', FernwayTransactionReviewView.as_view(), {'decision': 'approve'}, name='account_tx_approve'),
+    path('accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/decline/', FernwayTransactionReviewView.as_view(), {'decision': 'decline'}, name='account_tx_decline'),
+
+    # Legacy / Defaults Management Endpoints
+    path('manage/', FernwayManageMetaView.as_view(), name='manage'),
+    path('manage/create/', FernwayCreateAccountView.as_view(), name='manage_create'),
+    path('manage/upgrade/', FernwayProfileUpgradeView.as_view(), name='manage_upgrade'),
+    path('manage/account/<uuid:account_id>/', FernwayAccountUpdateView.as_view(), name='manage_account'),
+    path('manage/transaction/', FernwayTransactionView.as_view(), name='manage_transaction_create'),
+    path('manage/transaction/<uuid:transaction_id>/', FernwayTransactionView.as_view(), name='manage_transaction_delete'),
+    path('manage/card/<uuid:card_id>/', FernwayCardUpdateView.as_view(), name='manage_card'),
+    path('manage/reset/', FernwayProfileResetView.as_view(), name='manage_reset'),
+
+    # Fernway Frontend Client Endpoints
+    path('client/auth/login/', FernwayClientAuthLoginView.as_view(), name='client_login'),
+    path('client/data/', FernwayClientDataView.as_view(), name='client_data'),
+    path('client/transfers/', FernwayClientTransferCreateView.as_view(), name='client_transfer_create'),
+    path('client/cards/', FernwayClientCardListCreateView.as_view(), name='client_card_list_create'),
+    path('client/cards/<uuid:card_id>/', FernwayClientCardDetailView.as_view(), name='client_card_detail'),
+    path('client/support/', FernwayClientSupportListCreateView.as_view(), name='client_support_list_create'),
+    path('client/support/<uuid:message_id>/', FernwayClientSupportDetailView.as_view(), name='client_support_detail'),
+    path('client/support/<uuid:message_id>/replies/', FernwayClientSupportReplyView.as_view(), name='client_support_reply'),
+    path('client/support/<uuid:message_id>/realtime-auth/', FernwayClientSupportRealtimeAuthView.as_view(), name='client_support_realtime_auth'),
+
+    # SharpToolz Admin Endpoints (manage all users' online banking accounts)
+    path('admin/settings/', FernwayAdminSettingsView.as_view(), name='admin_settings'),
+    path('admin/accounts/', FernwayAdminAccountListView.as_view(), name='admin_accounts_list'),
+    path('admin/accounts/<uuid:profile_id>/', FernwayAdminAccountDetailView.as_view(), name='admin_account_detail'),
+    path('admin/accounts/<uuid:profile_id>/subscription/', FernwayAdminSubscriptionView.as_view(), name='admin_account_subscription'),
+    path('admin/accounts/<uuid:profile_id>/reset/', FernwayAdminResetView.as_view(), name='admin_account_reset'),
+    path('admin/accounts/<uuid:profile_id>/transaction/', FernwayAdminTransactionView.as_view(), name='admin_account_tx_create'),
+    path('admin/accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/', FernwayAdminTransactionView.as_view(), name='admin_account_tx_delete'),
+    path('admin/accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/approve/', FernwayAdminTransactionReviewView.as_view(), {'decision': 'approve'}, name='admin_account_tx_approve'),
+    path('admin/accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/decline/', FernwayAdminTransactionReviewView.as_view(), {'decision': 'decline'}, name='admin_account_tx_decline'),
+]

@@ -43,6 +43,10 @@ app.conf.beat_schedule = {
         "task": "api.tasks.cleanup_expired_document_renders",
         "schedule": crontab(minute=20),
     },
+    "banking-monthly-renewal-reminders": {
+        "task": "banking.tasks.send_monthly_renewal_reminders",
+        "schedule": crontab(minute=0, hour=9),
+    },
 }
 
 

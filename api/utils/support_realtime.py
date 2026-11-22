@@ -73,20 +73,17 @@ def authorize_private_channel(socket_id, channel_name):
     return {"auth": f"{credentials['key']}:{signature}"}
 
 
-def publish_support_update(ticket, event="support.updated"):
+def _publish_pusher_event(channels, event, payload):
     credentials = _credentials()
-    if not all(credentials.values()):
+    if not all(credentials.values()) or not channels:
         return False
 
     path = f"/apps/{credentials['app_id']}/events"
-    event_data = json.dumps(
-        {"ticket_id": str(ticket.id), "updated_at": ticket.updated_at.isoformat()},
-        separators=(",", ":"),
-    )
+    event_data = json.dumps(payload, separators=(",", ":"))
     body = json.dumps(
         {
             "name": event,
-            "channels": [ticket_channel(ticket.id), owner_channel(ticket.document.buyer_id)],
+            "channels": channels,
             "data": event_data,
         },
         separators=(",", ":"),
@@ -116,5 +113,22 @@ def publish_support_update(ticket, event="support.updated"):
         response.raise_for_status()
         return True
     except requests.RequestException:
-        logger.exception("Could not publish realtime support update for ticket %s", ticket.id)
+        logger.exception("Could not publish realtime event %s to %s", event, channels)
         return False
+
+
+def publish_support_update(ticket, event="support.updated"):
+    channels = [ticket_channel(ticket.id)]
+    if ticket.owner_id:
+        channels.append(owner_channel(ticket.owner_id))
+    return _publish_pusher_event(
+        channels,
+        event,
+        {"ticket_id": str(ticket.id), "updated_at": ticket.updated_at.isoformat()},
+    )
+
+
+def publish_owner_banking_event(user_id, event, payload):
+    if not user_id:
+        return False
+    return _publish_pusher_event([owner_channel(user_id)], event, payload)

@@ -2,6 +2,7 @@ import json
 import logging
 import uuid
 
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -126,13 +127,25 @@ class PublicTrackingSupportView(APIView):
         )
 
 
+def _owner_support_queryset(user, *, include_admin_fernway=False):
+    owner_q = Q(document__buyer=user) | Q(fernway_profile__user=user)
+    if include_admin_fernway and (user.is_staff or user.is_superuser):
+        owner_q = owner_q | Q(fernway_profile__isnull=False)
+    return TrackingSupportMessage.objects.filter(owner_q).select_related(
+        "document__buyer",
+        "fernway_profile__user",
+    ).prefetch_related("replies")
+
+
 class TrackingSupportMessageListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        messages = TrackingSupportMessage.objects.filter(
-            document__buyer=request.user,
-        ).select_related("document").prefetch_related("replies").order_by("-updated_at")
+        fernway_profile_id = request.query_params.get("fernway_profile_id", "").strip()
+        messages = _owner_support_queryset(
+            request.user,
+            include_admin_fernway=bool(fernway_profile_id),
+        ).order_by("-updated_at")
         source = request.query_params.get("source", "").strip()
         message_status = request.query_params.get("status", "").strip()
         document_id = request.query_params.get("document_id", "").strip()
@@ -142,6 +155,8 @@ class TrackingSupportMessageListView(APIView):
             messages = messages.filter(status=message_status)
         if document_id:
             messages = messages.filter(document_id=document_id)
+        if fernway_profile_id:
+            messages = messages.filter(fernway_profile_id=fernway_profile_id)
         return Response({
             "results": TrackingSupportMessageSerializer(messages, many=True).data,
             "unread_count": messages.filter(status=TrackingSupportMessage.Status.NEW).count(),
@@ -155,9 +170,8 @@ class TrackingSupportMessageDetailView(APIView):
 
     def patch(self, request, message_id):
         support_message = get_object_or_404(
-            TrackingSupportMessage.objects.select_related("document"),
+            _owner_support_queryset(request.user, include_admin_fernway=True),
             id=message_id,
-            document__buyer=request.user,
         )
         serializer = TrackingSupportStatusSerializer(
             support_message,
@@ -175,9 +189,8 @@ class TrackingSupportReplyView(APIView):
 
     def post(self, request, message_id):
         support_message = get_object_or_404(
-            TrackingSupportMessage.objects.select_related("document__buyer").prefetch_related("replies"),
+            _owner_support_queryset(request.user, include_admin_fernway=True),
             id=message_id,
-            document__buyer=request.user,
         )
         serializer = TrackingSupportReplyCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -213,7 +226,10 @@ class TrackingSupportReplyView(APIView):
 
 def _customer_ticket(request, message_id):
     ticket = get_object_or_404(
-        TrackingSupportMessage.objects.select_related("document__buyer").prefetch_related("replies"),
+        TrackingSupportMessage.objects.select_related(
+            "document__buyer",
+            "fernway_profile__user",
+        ).prefetch_related("replies"),
         id=message_id,
     )
     if not customer_token_matches(ticket, request.headers.get("X-Support-Token", "")):

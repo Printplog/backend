@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/',include("api.urls")),
     path('api/',include("wallet.urls")),
     path('api/analytics/',include("analytics.urls")),
+    path('api/fernway/', include('banking.urls')),
     # Innocuous-named alias of /api/analytics/log-visit/ — bypasses ad-blocker
     # filter lists that match URLs containing "analytics" or "log".
     path('api/u/p/', LogVisitView.as_view(), name='analytics-track-page'),

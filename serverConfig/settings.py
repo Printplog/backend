@@ -175,6 +175,7 @@ INSTALLED_APPS = [
     "api",
     "wallet",
     "analytics",
+    "banking",
 ]
 
 MIDDLEWARE = [
@@ -493,6 +494,7 @@ REST_FRAMEWORK = {
         'analytics_ingest': os.getenv('THROTTLE_ANALYTICS_INGEST', '120/min' if IS_PRODUCTION else '1000/min'),
         'tracking_support': os.getenv('THROTTLE_TRACKING_SUPPORT', '8/hour' if IS_PRODUCTION else '120/min'),
         'support_verification': os.getenv('THROTTLE_SUPPORT_VERIFICATION', '20/hour' if IS_PRODUCTION else '240/min'),
+        'fernway_email_verification': os.getenv('THROTTLE_FERNWAY_EMAIL_VERIFICATION', '20/hour' if IS_PRODUCTION else '240/min'),
         'admin_read':    os.getenv('THROTTLE_ADMIN_READ',    '600/min' if IS_PRODUCTION else '2000/min'),
         'admin_2fa':     os.getenv('THROTTLE_ADMIN_2FA',     '10/min' if IS_PRODUCTION else '120/min'),
     },
@@ -742,8 +744,21 @@ FLIGHT_SUPPORT_FROM_EMAIL = os.getenv(
     "FLIGHT_SUPPORT_FROM_EMAIL",
     "MyFlightLookup Support <support@myflightlookup.com>",
 )
+FERNWAY_SUPPORT_FROM_EMAIL = os.getenv(
+    "FERNWAY_SUPPORT_FROM_EMAIL",
+    "Fernway Support <support@fernwaybank.com>",
+)
+FERNWAY_SECURITY_FROM_EMAIL = os.getenv(
+    "FERNWAY_SECURITY_FROM_EMAIL",
+    "Fernway Security <security@fernwaybank.com>",
+)
+SHARPTOOLZ_NOTIFICATIONS_FROM_EMAIL = os.getenv(
+    "SHARPTOOLZ_NOTIFICATIONS_FROM_EMAIL",
+    "SharpToolz <notifications@sharptoolz.com>",
+)
 PARCEL_SUPPORT_DOMAIN = os.getenv("PARCEL_SUPPORT_DOMAIN", "parcelfinda.com")
 FLIGHT_SUPPORT_DOMAIN = os.getenv("FLIGHT_SUPPORT_DOMAIN", "myflightlookup.com")
+FERNWAY_SUPPORT_DOMAIN = os.getenv("FERNWAY_SUPPORT_DOMAIN", "fernwaybank.com")
 
 # Defined after the block above so it wins over the SMTP backend.
 if TESTING:

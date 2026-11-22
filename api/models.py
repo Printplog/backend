@@ -15,15 +15,18 @@ User = get_user_model()
 class Tool(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=100, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=5.00)
     is_active = models.BooleanField(default=True)
+    is_pinned = models.BooleanField(default=False)
+    badge = models.CharField(max_length=50, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
         verbose_name_plural = "Tools"
-        ordering = ['name']
-        indexes = [models.Index(fields=['is_active'])]
+        ordering = ['-is_pinned', 'name']
+        indexes = [models.Index(fields=['is_active']), models.Index(fields=['is_pinned'])]
     
     def __str__(self):
         return self.name
@@ -295,6 +298,7 @@ class TrackingSupportMessage(models.Model):
     class Source(models.TextChoices):
         PARCEL_FINDA = "parcel_finda", "ParcelFinda"
         FLIGHT_LOOKUP = "flight_lookup", "MyFlightLookup"
+        FERNWAY = "fernway", "Fernway Banking"
 
     class Status(models.TextChoices):
         NEW = "new", "New"
@@ -305,12 +309,21 @@ class TrackingSupportMessage(models.Model):
     document = models.ForeignKey(
         PurchasedTemplate,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="support_messages",
+    )
+    fernway_profile = models.ForeignKey(
+        "banking.FernwayProfile",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="support_messages",
     )
     tracking_id = models.CharField(max_length=100)
     source = models.CharField(max_length=24, choices=Source.choices)
     customer_name = models.CharField(max_length=120)
-    customer_email = models.EmailField(max_length=254)
+    customer_email = models.EmailField(max_length=254, blank=True, default="")
     subject = models.CharField(max_length=160)
     message = models.TextField(max_length=5000)
     customer_access_token_hash = models.CharField(max_length=64, blank=True, default="")
@@ -322,8 +335,25 @@ class TrackingSupportMessage(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["document", "-created_at"], name="support_doc_created_idx"),
+            models.Index(fields=["fernway_profile", "-created_at"], name="support_fernway_created_idx"),
             models.Index(fields=["status", "-created_at"], name="support_status_created_idx"),
         ]
+
+    @property
+    def owner(self):
+        if self.document_id and self.document:
+            return self.document.buyer
+        if self.fernway_profile_id and self.fernway_profile:
+            return self.fernway_profile.user
+        return None
+
+    @property
+    def owner_id(self):
+        if self.document_id and self.document:
+            return self.document.buyer_id
+        if self.fernway_profile_id and self.fernway_profile:
+            return self.fernway_profile.user_id
+        return None
 
     def __str__(self):
         return f"{self.get_source_display()} · {self.tracking_id} · {self.subject}"
@@ -743,6 +773,11 @@ class SiteSettings(models.Model):
     global_announcement_text = models.TextField(blank=True, help_text="Text for global dashboard banner")
     global_announcement_link = models.URLField(blank=True, help_text="Optional link for global banner")
     enable_global_announcement = models.BooleanField(default=False, help_text="Show the global banner to all users")
+    online_banking_url = models.URLField(
+        blank=True,
+        default="",
+        help_text="Public base URL for the Online Banking (Fernway) web app, e.g. https://fernwaybank.com",
+    )
     
     # 5. Referral Program Configs
     enable_referrals = models.BooleanField(default=True, help_text="Enable the referral program")

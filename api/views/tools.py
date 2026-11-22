@@ -58,7 +58,7 @@ def move_templates(request, field, group, log_action_name, only_from=None):
 
 
 class ToolViewSet(viewsets.ModelViewSet):
-    queryset = Tool.objects.select_related('tutorial').annotate(templates_count=Count('templates')).order_by('name')
+    queryset = Tool.objects.select_related('tutorial').annotate(templates_count=Count('templates')).order_by('-is_pinned', 'name')
     serializer_class = ToolSerializer
     permission_classes = [IsAdminOrReadOnly]
 

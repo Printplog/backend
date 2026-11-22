@@ -32,6 +32,12 @@ def _brand_for_source(source):
             "from": settings.PARCEL_SUPPORT_FROM_EMAIL,
             "domain": settings.PARCEL_SUPPORT_DOMAIN.lower(),
         }
+    if source == TrackingSupportMessage.Source.FERNWAY:
+        return {
+            "name": "Fernway Banking",
+            "from": settings.FERNWAY_SUPPORT_FROM_EMAIL,
+            "domain": settings.FERNWAY_SUPPORT_DOMAIN.lower(),
+        }
     return {
         "name": "MyFlightLookup",
         "from": settings.FLIGHT_SUPPORT_FROM_EMAIL,
@@ -151,7 +157,8 @@ def _send(ticket, *, recipient, title, body, idempotency_key):
 
 
 def notify_owner_of_new_ticket(ticket):
-    owner_email = ticket.document.buyer.email
+    owner = ticket.owner
+    owner_email = owner.email if owner else ""
     if not owner_email:
         logger.warning("Support ticket %s owner has no email address", ticket.id)
         return None
@@ -175,9 +182,10 @@ def send_owner_reply(ticket, body, *, idempotency_key):
 
 
 def notify_owner_of_customer_reply(ticket, body, *, idempotency_key):
-    owner_email = ticket.document.buyer.email
+    owner = ticket.owner
+    owner_email = owner.email if owner else ""
     if not owner_email:
-        raise SupportEmailError("The document owner has no email address.")
+        raise SupportEmailError("The owner has no email address.")
     return _send(
         ticket,
         recipient=owner_email,
@@ -223,7 +231,10 @@ def _ticket_from_recipients(recipients):
             ticket_id = uuid.UUID(hex=match.group(1))
         except ValueError:
             continue
-        ticket = TrackingSupportMessage.objects.select_related("document__buyer").filter(id=ticket_id).first()
+        ticket = TrackingSupportMessage.objects.select_related(
+            "document__buyer",
+            "fernway_profile__user",
+        ).filter(id=ticket_id).first()
         if ticket and match.group(2).lower() == _brand(ticket)["domain"]:
             return ticket
     return None
@@ -246,8 +257,9 @@ def process_inbound_email(data):
         body = "(This reply did not contain readable text.)"
     body = body[:10000]
     sender = parseaddr(received.get("from") or data.get("from") or "")[1].lower()
-    owner_email = (ticket.document.buyer.email or "").lower()
-    customer_email = ticket.customer_email.lower()
+    owner = ticket.owner
+    owner_email = ((owner.email if owner else "") or "").lower()
+    customer_email = (ticket.customer_email or "").lower()
 
     if sender == customer_email:
         notify_owner_of_customer_reply(
@@ -309,7 +321,10 @@ def update_delivery_status(event_type, data):
     delivery_status = status_map.get(event_type)
     if not delivery_status:
         return False
-    reply = TrackingSupportReply.objects.select_related("support_message__document__buyer").filter(
+    reply = TrackingSupportReply.objects.select_related(
+        "support_message__document__buyer",
+        "support_message__fernway_profile__user",
+    ).filter(
         resend_email_id=email_id,
     ).first()
     if reply is None:

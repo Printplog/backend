@@ -196,3 +196,38 @@ class EmailService:
         }
         # We'll use a generic contact notification template
         return cls._send_email(email_subject, 'emails/site/contact_notification.html', context, [dest_email])
+
+    @classmethod
+    def send_banking_renewal_reminder(
+        cls,
+        *,
+        user,
+        account_name,
+        account_email,
+        account_id,
+        expires_at,
+        days_remaining,
+        is_expired,
+        monthly_price,
+    ):
+        subject = (
+            f"Renewal Required: Fernway Online Banking ({account_email})"
+            if is_expired
+            else f"Renewal Reminder: Fernway Online Banking expires in {days_remaining}d ({account_email})"
+        )
+        context = {
+            'username': user.username,
+            'account_name': account_name,
+            'account_email': account_email,
+            'expires_at': expires_at.strftime('%b %d, %Y') if expires_at else 'Soon',
+            'days_remaining': days_remaining,
+            'is_expired': is_expired,
+            'monthly_price': f"{monthly_price:,.2f}",
+            'renew_url': f"{settings.FRONTEND_URL}/online-banking/{account_id}",
+        }
+        return cls._send_email(
+            subject,
+            'emails/banking/renewal_reminder.html',
+            context,
+            [user.email],
+        )

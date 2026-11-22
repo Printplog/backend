@@ -1,0 +1,51 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Online Banking Renewal Reminder - SharpToolz{% endblock %}
+
+{% block content %}
+<div style="text-align: center; margin-bottom: 30px;">
+    <h1 style="margin: 0; font-size: 24px; color: #ffffff;">
+        {% if is_expired %}
+            Online Banking Subscription Expired
+        {% else %}
+            Monthly Renewal Reminder
+        {% endif %}
+    </h1>
+    <p style="color: #9ca3af; margin-top: 10px;">
+        {% if is_expired %}
+            Your Fernway online banking account is now showing a simulation notice until renewed.
+        {% else %}
+            Your Fernway online banking account renews in {{ days_remaining }} day{% if days_remaining != 1 %}s{% endif %}.
+        {% endif %}
+    </p>
+</div>
+
+<div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; padding: 25px; margin-bottom: 30px;">
+    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+        <tr>
+            <td style="padding-bottom: 14px; color: #9ca3af; font-size: 14px;">Account Holder</td>
+            <td style="padding-bottom: 14px; color: #ffffff; font-weight: 600; text-align: right;">{{ account_name }}</td>
+        </tr>
+        <tr>
+            <td style="padding-bottom: 14px; color: #9ca3af; font-size: 14px;">Sign-In Email</td>
+            <td style="padding-bottom: 14px; color: #cee88c; font-weight: 600; text-align: right; font-family: monospace; font-size: 13px;">{{ account_email }}</td>
+        </tr>
+        <tr>
+            <td style="padding-bottom: 14px; color: #9ca3af; font-size: 14px;">Renewal Date</td>
+            <td style="padding-bottom: 14px; color: #ffffff; font-weight: 600; text-align: right;">{{ expires_at }}</td>
+        </tr>
+        <tr style="border-top: 1px solid rgba(255, 255, 255, 0.1);">
+            <td style="padding-top: 14px; color: #9ca3af; font-size: 14px;">Monthly Renewal Fee</td>
+            <td style="padding-top: 14px; color: #cee88c; font-weight: 800; text-align: right; font-size: 18px;">${{ monthly_price }} / month</td>
+        </tr>
+    </table>
+</div>
+
+<div style="text-align: center;">
+    <p style="font-size: 14px; color: #9ca3af; line-height: 1.6;">
+        Each live Fernway online banking account renews monthly from your crypto-funded SharpToolz wallet.
+        Renew now to keep the simulation notice hidden for another 30 days.
+    </p>
+    <a href="{{ renew_url }}" class="button">Renew Account</a>
+</div>
+{% endblock %}
