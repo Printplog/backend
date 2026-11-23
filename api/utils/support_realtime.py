@@ -128,6 +128,26 @@ def publish_support_update(ticket, event="support.updated"):
     )
 
 
+def publish_support_typing(ticket, *, sender, is_typing=True, sender_name=""):
+    if sender == "owner":
+        channels = [ticket_channel(ticket.id)]
+    else:
+        channels = [owner_channel(ticket.owner_id)] if ticket.owner_id else []
+    if not channels:
+        return False
+    return _publish_pusher_event(
+        channels,
+        "support.typing",
+        {
+            "ticket_id": str(ticket.id),
+            "sender": sender,
+            "sender_name": str(sender_name or "")[:80],
+            "is_typing": bool(is_typing),
+            "sent_at": time.time(),
+        },
+    )
+
+
 def publish_owner_banking_event(user_id, event, payload):
     if not user_id:
         return False
