@@ -631,18 +631,94 @@ def notify_card_updated(profile, card, *, changes: list[str], actor: str = "cust
     _dispatch_best_effort(_run)
 
 
+def _fernway_portal_base_url() -> str:
+    import os
+
+    try:
+        raw = (SiteSettings.get_settings().online_banking_url or "").strip().rstrip("/")
+        if raw:
+            return raw
+    except Exception:
+        pass
+    env_url = (os.getenv("FERNWAY_APP_URL") or "").strip().rstrip("/")
+    if env_url:
+        return env_url
+    domain = getattr(settings, "FERNWAY_SUPPORT_DOMAIN", "fernwaybank.com") or "fernwaybank.com"
+    return f"https://{domain}"
+
+
 def _fernway_portal_host() -> str:
     try:
         from urllib.parse import urlparse
 
-        raw = (SiteSettings.get_settings().online_banking_url or "").strip()
-        if raw:
-            parsed = urlparse(raw)
-            if parsed.netloc:
-                return parsed.netloc
+        parsed = urlparse(_fernway_portal_base_url())
+        if parsed.netloc:
+            return parsed.netloc
     except Exception:
         pass
     return getattr(settings, "FERNWAY_SUPPORT_DOMAIN", "fernwaybank.com") or "fernwaybank.com"
+
+
+def send_fernway_credentials_email(profile) -> str:
+    """Email the Fernway online banking portal link & login credentials directly to the account email."""
+    recipient = (getattr(profile, "email", "") or "").strip()
+    if not recipient or "@" not in recipient:
+        raise BankingEmailError("This banking account does not have a valid sign-in email.")
+
+    portal_base = _fernway_portal_base_url()
+    portal_host = _fernway_portal_host()
+    sign_in_url = f"{portal_base}/sign-in"
+    full_name = f"{profile.first_name} {profile.last_name}".strip() or "Account Holder"
+    primary_account = profile.accounts.first()
+
+    details = [
+        {"label": "Account Holder", "value": full_name},
+        {"label": "Portal Website", "value": portal_host, "mono": True, "highlight": True},
+        {"label": "Sign-In Email", "value": recipient, "mono": True},
+        {"label": "Password", "value": profile.password, "mono": True},
+        {"label": "Transaction PIN", "value": profile.transaction_pin or "1234", "mono": True},
+    ]
+    if primary_account and getattr(primary_account, "account_number", None):
+        details.append({"label": "Account Number", "value": primary_account.account_number, "mono": True})
+
+    html = render_to_string(
+        "emails/banking/fernway_credentials.html",
+        {
+            "first_name": profile.first_name or full_name,
+            "details": details,
+            "sign_in_url": sign_in_url,
+            "portal_host": portal_host,
+            "current_year": timezone.now().year,
+        },
+    )
+    text_lines = [
+        f"Hi {profile.first_name or full_name},",
+        "",
+        "Your Fernway online banking account is ready.",
+        f"Sign-In Portal: {sign_in_url}",
+        f"Sign-In Email: {recipient}",
+        f"Password: {profile.password}",
+        f"Transaction PIN: {profile.transaction_pin or '1234'}",
+    ]
+    if primary_account and getattr(primary_account, "account_number", None):
+        text_lines.append(f"Account Number: {primary_account.account_number}")
+    text = "\n".join(text_lines)
+
+    email_id = _send_resend_email(
+        from_email=settings.FERNWAY_SECURITY_FROM_EMAIL,
+        recipient=recipient,
+        subject="Your Fernway Online Banking Sign-In Details",
+        html=html,
+        text=text,
+        tags=[
+            {"name": "product", "value": "fernway"},
+            {"name": "event", "value": "credentials_email"},
+        ],
+        idempotency_key=f"fernway-creds-{profile.id}-{uuid.uuid4().hex[:12]}",
+    )
+    profile.credentials_email_sent_at = timezone.now()
+    profile.save(update_fields=["credentials_email_sent_at", "updated_at"])
+    return email_id
 
 
 def notify_transaction_posted(profile, tx):

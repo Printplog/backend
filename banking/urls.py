@@ -9,6 +9,7 @@ from .views import (
     FernwayProfileUpgradeView,
     FernwayProfileRenewView,
     FernwayProfileResetView,
+    FernwaySendCredentialsEmailView,
     FernwayManageMetaView,
     FernwayCreateAccountView,
     FernwayAccountUpdateView,
@@ -31,6 +32,7 @@ from .views import (
     FernwayAdminResetView,
     FernwayAdminTransactionView,
     FernwayAdminTransactionReviewView,
+    FernwayAdminSendCredentialsEmailView,
 )
 
 app_name = 'banking'
@@ -46,6 +48,7 @@ urlpatterns = [
     path('accounts/<uuid:profile_id>/upgrade/', FernwayProfileUpgradeView.as_view(), name='account_upgrade'),
     path('accounts/<uuid:profile_id>/renew/', FernwayProfileRenewView.as_view(), name='account_renew'),
     path('accounts/<uuid:profile_id>/reset/', FernwayProfileResetView.as_view(), name='account_reset'),
+    path('accounts/<uuid:profile_id>/send-credentials/', FernwaySendCredentialsEmailView.as_view(), name='account_send_credentials'),
     path('accounts/<uuid:profile_id>/transaction/', FernwayTransactionView.as_view(), name='account_tx_create'),
     path('accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/', FernwayTransactionView.as_view(), name='account_tx_delete'),
     path('accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/approve/', FernwayTransactionReviewView.as_view(), {'decision': 'approve'}, name='account_tx_approve'),
@@ -78,6 +81,7 @@ urlpatterns = [
     path('admin/accounts/<uuid:profile_id>/', FernwayAdminAccountDetailView.as_view(), name='admin_account_detail'),
     path('admin/accounts/<uuid:profile_id>/subscription/', FernwayAdminSubscriptionView.as_view(), name='admin_account_subscription'),
     path('admin/accounts/<uuid:profile_id>/reset/', FernwayAdminResetView.as_view(), name='admin_account_reset'),
+    path('admin/accounts/<uuid:profile_id>/send-credentials/', FernwayAdminSendCredentialsEmailView.as_view(), name='admin_account_send_credentials'),
     path('admin/accounts/<uuid:profile_id>/transaction/', FernwayAdminTransactionView.as_view(), name='admin_account_tx_create'),
     path('admin/accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/', FernwayAdminTransactionView.as_view(), name='admin_account_tx_delete'),
     path('admin/accounts/<uuid:profile_id>/transaction/<uuid:transaction_id>/approve/', FernwayAdminTransactionReviewView.as_view(), {'decision': 'approve'}, name='admin_account_tx_approve'),

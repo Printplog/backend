@@ -112,16 +112,58 @@ class FernwayMultiAccountSubscriptionTests(TestCase):
         self.assertTrue(fresh_client.get('/api/accounts/user/').json()['email_verified'])
 
         # Now user can create a Fernway account WITHOUT verifying the Fernway client email
-        created = fresh_client.post('/api/fernway/accounts/', {
-            'test': True,
-            'first_name': 'Client',
-            'last_name': 'One',
-            'email': 'client1@fernwaybank.com',
-            'password': 'secret123',
-        }, format='json')
+        # and optionally email the login details directly to the client
+        creds_sent = []
+        with patch(
+            'banking.notifications._send_resend_email',
+            side_effect=lambda **kw: creds_sent.append(kw) or 'resend-creds-1',
+        ):
+            created = fresh_client.post('/api/fernway/accounts/', {
+                'test': True,
+                'first_name': 'Client',
+                'last_name': 'One',
+                'email': 'client1@fernwaybank.com',
+                'password': 'secret123',
+                'transaction_pin': '6789',
+                'send_credentials_email': True,
+            }, format='json')
         self.assertEqual(created.status_code, 201)
-        self.assertFalse(created.json()['email_verified'])
-        self.assertTrue(created.json()['owner_email_verified'])
+        created_data = created.json()
+        self.assertFalse(created_data['email_verified'])
+        self.assertTrue(created_data['owner_email_verified'])
+        self.assertTrue(created_data['credentials_email_sent'])
+        self.assertIsNotNone(created_data['credentials_email_sent_at'])
+        self.assertEqual(len(creds_sent), 1)
+        self.assertEqual(creds_sent[0]['recipient'], 'client1@fernwaybank.com')
+        self.assertIn('secret123', creds_sent[0]['html'])
+        self.assertIn('6789', creds_sent[0]['html'])
+
+        # Verify SiteSettingsSerializer (admin) also returns FERNWAY_APP_URL fallback when DB field is blank
+        admin_user = User.objects.create_user(
+            username='settingsadmin',
+            email='settingsadmin@sharptoolz.test',
+            password='adminpassword123',
+            is_staff=True,
+            is_superuser=True,
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(user=admin_user)
+        with patch.dict('os.environ', {'FERNWAY_APP_URL': 'https://fernway.sharptoolz.com'}):
+            admin_settings = admin_client.get('/api/settings/')
+        self.assertEqual(admin_settings.status_code, 200)
+        self.assertEqual(admin_settings.json()['online_banking_url'], 'https://fernway.sharptoolz.com')
+
+        # Owner can also resend the exact same login details email anytime
+        creds_sent.clear()
+        with patch(
+            'banking.notifications._send_resend_email',
+            side_effect=lambda **kw: creds_sent.append(kw) or 'resend-creds-2',
+        ):
+            resend = fresh_client.post(f"/api/fernway/accounts/{created_data['id']}/send-credentials/")
+        self.assertEqual(resend.status_code, 200)
+        self.assertTrue(resend.json()['sent'])
+        self.assertEqual(resend.json()['recipient'], 'client1@fernwaybank.com')
+        self.assertEqual(len(creds_sent), 1)
 
     def test_user_can_create_multiple_accounts_with_card_details_and_subscriptions(self):
         # 0. Creating without verifying email is allowed (verification is optional)

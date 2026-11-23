@@ -27,6 +27,7 @@ class FernwayProfile(models.Model):
     email = models.EmailField(default='alexander@fernwaybank.com')
     email_verified = models.BooleanField(default=False)
     email_verified_at = models.DateTimeField(null=True, blank=True)
+    credentials_email_sent_at = models.DateTimeField(null=True, blank=True)
     phone = models.CharField(max_length=50, default='+1 (555) 019-2834', blank=True)
     address = models.CharField(max_length=255, default='742 Evergreen Terrace, New York, NY 10001', blank=True)
     password = models.CharField(max_length=128, default='password123')

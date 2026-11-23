@@ -93,6 +93,7 @@ class FernwayProfileSerializer(serializers.ModelSerializer):
             'email',
             'email_verified',
             'email_verified_at',
+            'credentials_email_sent_at',
             'owner_email',
             'owner_email_verified',
             'phone',

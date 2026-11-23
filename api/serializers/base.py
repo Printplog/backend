@@ -168,6 +168,16 @@ class SiteSettingsSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Embed session lifetime must be between 1 and 1440 minutes.")
         return value
 
+    def to_representation(self, instance):
+        import os
+
+        data = super().to_representation(instance)
+        if not (data.get('online_banking_url') or '').strip():
+            fallback = (os.getenv('FERNWAY_APP_URL') or '').strip().rstrip('/')
+            if fallback:
+                data['online_banking_url'] = fallback
+        return data
+
 
 class PublicSiteSettingsSerializer(serializers.ModelSerializer):
     """Serializer for guest users only showing non-sensitive configuration."""

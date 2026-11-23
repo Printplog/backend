@@ -54,6 +54,7 @@ from .notifications import (
     read_fernway_email_verification_grant,
     request_fernway_email_verification,
     request_owner_email_verification,
+    send_fernway_credentials_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -546,7 +547,20 @@ class FernwayProfileListCreateView(APIView):
         except ValueError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(FernwayProfileSerializer(profile).data, status=status.HTTP_201_CREATED)
+        email_sent = False
+        email_error = None
+        if bool(request.data.get('send_credentials_email', False)):
+            try:
+                send_fernway_credentials_email(profile)
+                email_sent = True
+            except BankingEmailError as exc:
+                email_error = str(exc)
+
+        payload = dict(FernwayProfileSerializer(profile).data)
+        payload['credentials_email_sent'] = email_sent
+        if email_error:
+            payload['credentials_email_error'] = email_error
+        return Response(payload, status=status.HTTP_201_CREATED)
 
 
 def _client_ip(request) -> str:
@@ -1864,3 +1878,64 @@ class FernwayAdminSettingsView(APIView):
         site_settings.online_banking_url = normalized
         site_settings.save(update_fields=['online_banking_url', 'updated_at'])
         return Response({'online_banking_url': normalized})
+
+
+class FernwaySendCredentialsEmailView(APIView):
+    """Send or resend the Fernway sign-in credentials email to the account's email address."""
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "fernway_email_verification"
+
+    def post(self, request, profile_id):
+        profile = _get_user_profile(request.user, profile_id)
+        if not profile:
+            return Response({'error': 'Online banking account not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not getattr(request.user, 'is_superuser', False) and not getattr(request.user, 'email_verified', False):
+            return Response(
+                {'error': 'Verify your SharpToolz account email before emailing account details.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            send_fernway_credentials_email(profile)
+        except BankingEmailError as exc:
+            return Response(
+                {'error': str(exc) or 'Could not send login details email right now.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        profile.refresh_from_db()
+        return Response({
+            'sent': True,
+            'recipient': profile.email,
+            'credentials_email_sent_at': profile.credentials_email_sent_at,
+            'profile': FernwayProfileSerializer(profile).data,
+        })
+
+
+class FernwayAdminSendCredentialsEmailView(APIView):
+    """Admin endpoint to send or resend the Fernway sign-in credentials email for any user's account."""
+    permission_classes = [IsAdminOnly]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "fernway_email_verification"
+
+    def post(self, request, profile_id):
+        profile = FernwayProfile.objects.filter(id=profile_id).first()
+        if not profile:
+            return Response({'error': 'Online banking account not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            send_fernway_credentials_email(profile)
+        except BankingEmailError as exc:
+            return Response(
+                {'error': str(exc) or 'Could not send login details email right now.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        profile.refresh_from_db()
+        return Response({
+            'sent': True,
+            'recipient': profile.email,
+            'credentials_email_sent_at': profile.credentials_email_sent_at,
+            'profile': FernwayAdminProfileSerializer(profile).data,
+        })
