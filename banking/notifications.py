@@ -211,6 +211,107 @@ def read_fernway_email_verification_grant(*, token: str, expected_user_id: int, 
     return payload
 
 
+def _owner_verification_cache_key(challenge_id: str) -> str:
+    return f"sharptoolz-owner-email-verification:{challenge_id}"
+
+
+def _owner_code_digest(challenge_id: str, code: str) -> str:
+    return salted_hmac("sharptoolz-owner-email-code", f"{challenge_id}:{code}").hexdigest()
+
+
+def request_owner_email_verification(*, user) -> str:
+    email = (getattr(user, "email", "") or "").strip().lower()
+    if not email or "@" not in email:
+        raise BankingVerificationError("Your SharpToolz account does not have a valid email address.")
+
+    challenge_id = secrets.token_urlsafe(24)
+    code = f"{secrets.randbelow(10_000):04d}"
+    challenge = {
+        "user_id": int(user.id),
+        "email": email,
+        "code_digest": _owner_code_digest(challenge_id, code),
+        "attempts": 0,
+        "expires_at": int(time.time()) + CHALLENGE_TTL_SECONDS,
+    }
+    cache.set(_owner_verification_cache_key(challenge_id), challenge, timeout=CHALLENGE_TTL_SECONDS)
+
+    try:
+        site_settings = SiteSettings.get_settings()
+    except Exception:
+        site_settings = None
+
+    frontend_url = (getattr(settings, "FRONTEND_URL", "") or "https://sharptoolz.com").rstrip("/")
+    html = render_to_string(
+        "emails/banking/owner_verification_code.html",
+        {
+            "code": code,
+            "current_year": timezone.now().year,
+            "support_email": (getattr(site_settings, "support_email", None) or "support@sharptoolz.com"),
+            "site_settings": site_settings,
+            "frontend_url": frontend_url,
+        },
+    )
+    text = (
+        f"Your SharpToolz email verification code is {code}. "
+        "Enter this 4-digit code in SharpToolz to verify your account email for Online Banking alerts. "
+        "It expires in 10 minutes."
+    )
+    from_email = (
+        getattr(settings, "SHARPTOOLZ_NOTIFICATIONS_FROM_EMAIL", "")
+        or settings.DEFAULT_FROM_EMAIL
+        or "SharpToolz <notifications@sharptoolz.com>"
+    )
+    try:
+        _send_resend_email(
+            from_email=from_email,
+            recipient=email,
+            subject=f"{code} is your SharpToolz verification code",
+            html=html,
+            text=text,
+            tags=[
+                {"name": "product", "value": "sharptoolz_banking"},
+                {"name": "purpose", "value": "owner_email_verification"},
+            ],
+            idempotency_key=f"stz-owner-verify-{challenge_id}",
+        )
+    except Exception:
+        cache.delete(_owner_verification_cache_key(challenge_id))
+        raise
+
+    return challenge_id
+
+
+def confirm_owner_email_verification(*, user, challenge_id: str, code: str) -> str:
+    key = _owner_verification_cache_key(challenge_id)
+    challenge = cache.get(key)
+    if not challenge or int(challenge.get("user_id", -1)) != int(user.id):
+        raise BankingVerificationError("This verification code has expired. Request a new one.")
+
+    if challenge["attempts"] >= MAX_CODE_ATTEMPTS:
+        cache.delete(key)
+        raise BankingVerificationError("Too many incorrect attempts. Request a new code.")
+
+    cleaned_code = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if len(cleaned_code) != 4 or not constant_time_compare(
+        challenge["code_digest"], _owner_code_digest(challenge_id, cleaned_code)
+    ):
+        challenge["attempts"] += 1
+        remaining = max(1, challenge["expires_at"] - int(time.time()))
+        cache.set(key, challenge, timeout=remaining)
+        raise BankingVerificationError("The verification code is incorrect.")
+
+    current_email = (getattr(user, "email", "") or "").strip().lower()
+    if challenge["email"] != current_email:
+        cache.delete(key)
+        raise BankingVerificationError("Your SharpToolz account email changed. Request a new code.")
+
+    cache.delete(key)
+    user.email_verified = True
+    user.email_verified_at = timezone.now()
+    user.save(update_fields=["email_verified", "email_verified_at"])
+    return current_email
+
+
 # ==============================================================================
 # Dual-Branded Notification Senders (SharpToolz Owner + Verified Fernway Email)
 # ==============================================================================

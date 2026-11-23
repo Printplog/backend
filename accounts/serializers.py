@@ -22,10 +22,14 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     total_purchases = serializers.SerializerMethodField()
     downloads = serializers.SerializerMethodField()
     date_joined = serializers.DateTimeField(read_only=True)
+    email_verified = serializers.SerializerMethodField()
+    email_verified_at = serializers.DateTimeField(read_only=True)
 
     class Meta(UserDetailsSerializer.Meta):
         fields = UserDetailsSerializer.Meta.fields + (
             "email",
+            "email_verified",
+            "email_verified_at",
             "role",
             "wallet_balance",
             "total_purchases",
@@ -42,6 +46,16 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "fbclid",
             "last_seen_update",
         )
+
+    def get_email_verified(self, user):
+        return bool(getattr(user, "is_superuser", False) or getattr(user, "email_verified", False))
+
+    def update(self, instance, validated_data):
+        new_email = validated_data.get("email")
+        if new_email is not None and new_email.strip().lower() != (instance.email or "").strip().lower():
+            instance.email_verified = False
+            instance.email_verified_at = None
+        return super().update(instance, validated_data)
 
 
     def get_role(self, user):

@@ -20,6 +20,7 @@ class FernwayMultiAccountSubscriptionTests(TestCase):
             username='banktester',
             email='owner@sharptoolz.test',
             password='strongpassword123',
+            email_verified=True,
         )
         self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
         self.wallet.balance = Decimal('50.00')
@@ -55,16 +56,88 @@ class FernwayMultiAccountSubscriptionTests(TestCase):
         self.assertEqual(confirm_res.status_code, 200, confirm_res.content)
         return confirm_res.json()['verification_token']
 
-    def test_user_can_create_multiple_accounts_with_card_details_and_subscriptions(self):
-        # 0. Creating without verifying email is rejected
-        unverified = self.client.post('/api/fernway/accounts/', {
+    def _verify_owner_email(self, client: APIClient) -> None:
+        sent_payloads = []
+
+        def fake_send(**kwargs):
+            sent_payloads.append(kwargs)
+            return 'resend-owner-verify-id'
+
+        with patch('banking.notifications._send_resend_email', side_effect=fake_send):
+            req_res = client.post('/api/accounts/email-verification/request/', {}, format='json')
+        self.assertEqual(req_res.status_code, 200, req_res.content)
+        challenge_id = req_res.json()['challenge_id']
+        self.assertEqual(len(sent_payloads), 1)
+        match = re.search(r'\b(\d{4})\b', sent_payloads[0]['subject'])
+        self.assertIsNotNone(match)
+        code = match.group(1)
+
+        confirm_res = client.post(
+            '/api/accounts/email-verification/confirm/',
+            {'challenge_id': challenge_id, 'code': code},
+            format='json',
+        )
+        self.assertEqual(confirm_res.status_code, 200, confirm_res.content)
+        self.assertTrue(confirm_res.json()['owner_email_verified'])
+
+    def test_sharptoolz_owner_email_must_be_verified_once_before_creating_accounts(self):
+        fresh_user = User.objects.create_user(
+            username='newsharptoolzuser',
+            email='fresh-owner@sharptoolz.test',
+            password='strongpassword123',
+        )
+        fresh_client = APIClient()
+        fresh_client.force_authenticate(user=fresh_user)
+
+        # Support inbox and account details both show unverified initially
+        self.assertFalse(fresh_client.get('/api/support/messages/').json()['owner_email_verified'])
+        self.assertFalse(fresh_client.get('/api/accounts/user/').json()['email_verified'])
+
+        # Blocked until SharpToolz owner email is verified
+        blocked = fresh_client.post('/api/fernway/accounts/', {
             'test': True,
-            'email': 'ada@fernwaybank.com',
+            'email': 'client1@fernwaybank.com',
             'password': 'secret123',
         }, format='json')
-        self.assertEqual(unverified.status_code, 400)
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('SharpToolz', blocked.json().get('error', ''))
 
-        # 1. Verify email & create a free Test Account
+        # Verify SharpToolz account email ONCE via the shared /api/accounts/email-verification/ flow
+        self._verify_owner_email(fresh_client)
+        fresh_user.refresh_from_db()
+        self.assertTrue(fresh_user.email_verified)
+
+        # Support, Account Details, and Online Banking all see the same verified state immediately
+        self.assertTrue(fresh_client.get('/api/support/messages/').json()['owner_email_verified'])
+        self.assertTrue(fresh_client.get('/api/accounts/user/').json()['email_verified'])
+
+        # Now user can create a Fernway account WITHOUT verifying the Fernway client email
+        created = fresh_client.post('/api/fernway/accounts/', {
+            'test': True,
+            'first_name': 'Client',
+            'last_name': 'One',
+            'email': 'client1@fernwaybank.com',
+            'password': 'secret123',
+        }, format='json')
+        self.assertEqual(created.status_code, 201)
+        self.assertFalse(created.json()['email_verified'])
+        self.assertTrue(created.json()['owner_email_verified'])
+
+    def test_user_can_create_multiple_accounts_with_card_details_and_subscriptions(self):
+        # 0. Creating without verifying email is allowed (verification is optional)
+        unverified = self.client.post('/api/fernway/accounts/', {
+            'test': True,
+            'first_name': 'Unverified',
+            'last_name': 'Client',
+            'email': 'unverified-client@fernwaybank.com',
+            'password': 'secret123',
+        }, format='json')
+        self.assertEqual(unverified.status_code, 201)
+        self.assertFalse(unverified.json()['email_verified'])
+        # Clean up so counts below match the two accounts created next
+        self.client.delete(f"/api/fernway/accounts/{unverified.json()['id']}/")
+
+        # 1. Optionally verify email & create a free Test Account
         ada_token = self._verify_email(self.client, 'ada@fernwaybank.com')
         res1 = self.client.post('/api/fernway/accounts/', {
             'test': True,
@@ -234,13 +307,39 @@ class FernwayMultiAccountSubscriptionTests(TestCase):
         pid = created['id']
         fw_token = created['auth_token']
 
-        # Changing email without re-verifying is rejected
-        bad_email_change = self.client.put(
+        # Changing email without verifying is allowed (resets email_verified to False),
+        # and verifying it again restores email_verified=True
+        changed_res = self.client.put(
             f'/api/fernway/accounts/{pid}/',
-            {'email': 'newemail@realinbox.test'},
+            {'email': 'temp-unverified@realinbox.test'},
             format='json',
         )
-        self.assertEqual(bad_email_change.status_code, 400)
+        self.assertEqual(changed_res.status_code, 200)
+        self.assertFalse(changed_res.json()['email_verified'])
+
+        # Login on unverified Fernway email notifies ONLY the SharpToolz owner, not the unverified email
+        unverified_sent = []
+        with (
+            patch('banking.notifications.get_integration_secret', return_value='re_test_key'),
+            patch('banking.notifications._send_resend_email', side_effect=lambda **kw: unverified_sent.append(kw) or 'id'),
+        ):
+            unv_login = APIClient().post(
+                '/api/fernway/client/auth/login/',
+                {'email': 'temp-unverified@realinbox.test', 'password': 'password123'},
+                format='json',
+            )
+            self.assertEqual(unv_login.status_code, 200)
+            self.assertEqual([item['recipient'] for item in unverified_sent], ['owner@sharptoolz.test'])
+
+        # Switch back with verified token to verify dual-branded alerts
+        reverify_token = self._verify_email(self.client, verified_email)
+        restored = self.client.put(
+            f'/api/fernway/accounts/{pid}/',
+            {'email': verified_email, 'email_verification_token': reverify_token},
+            format='json',
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.assertTrue(restored.json()['email_verified'])
 
         sent = []
 
@@ -431,7 +530,12 @@ class FernwayMultiAccountSubscriptionTests(TestCase):
         self.assertEqual(acct_res.status_code, 201)
         acct = acct_res.json()
 
-        other_user = User.objects.create_user(username='other', email='other@example.com', password='pw')
+        other_user = User.objects.create_user(
+            username='other',
+            email='other@example.com',
+            password='pw',
+            email_verified=True,
+        )
         other_client = APIClient()
         other_client.force_authenticate(user=other_user)
         alan_token = self._verify_email(other_client, 'alan@fernwaybank.com')

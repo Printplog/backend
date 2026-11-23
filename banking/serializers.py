@@ -81,6 +81,8 @@ class FernwayProfileSerializer(serializers.ModelSerializer):
     is_live = serializers.SerializerMethodField()
     days_remaining = serializers.SerializerMethodField()
     needs_renewal_reminder = serializers.SerializerMethodField()
+    owner_email = serializers.SerializerMethodField()
+    owner_email_verified = serializers.SerializerMethodField()
 
     class Meta:
         model = FernwayProfile
@@ -91,6 +93,8 @@ class FernwayProfileSerializer(serializers.ModelSerializer):
             'email',
             'email_verified',
             'email_verified_at',
+            'owner_email',
+            'owner_email_verified',
             'phone',
             'address',
             'password',
@@ -158,6 +162,15 @@ class FernwayProfileSerializer(serializers.ModelSerializer):
 
     def get_is_live(self, obj):
         return obj.is_live
+
+    def get_owner_email(self, obj):
+        return getattr(obj.user, 'email', '') or ''
+
+    def get_owner_email_verified(self, obj):
+        user = getattr(obj, 'user', None)
+        if not user:
+            return False
+        return bool(getattr(user, 'is_superuser', False) or getattr(user, 'email_verified', False))
 
     def get_days_remaining(self, obj):
         return obj.days_remaining

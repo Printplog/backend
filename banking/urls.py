@@ -1,6 +1,8 @@
 from django.urls import path
 from .views import (
     FernwayProfileListCreateView,
+    FernwayOwnerEmailVerificationRequestView,
+    FernwayOwnerEmailVerificationConfirmView,
     FernwayEmailVerificationRequestView,
     FernwayEmailVerificationConfirmView,
     FernwayProfileDetailView,
@@ -35,6 +37,8 @@ app_name = 'banking'
 
 urlpatterns = [
     # Multi-account Online Banking Endpoints (each account has its own monthly subscription)
+    path('owner-email-verification/request/', FernwayOwnerEmailVerificationRequestView.as_view(), name='owner_email_verify_request'),
+    path('owner-email-verification/confirm/', FernwayOwnerEmailVerificationConfirmView.as_view(), name='owner_email_verify_confirm'),
     path('email-verification/request/', FernwayEmailVerificationRequestView.as_view(), name='email_verify_request'),
     path('email-verification/confirm/', FernwayEmailVerificationConfirmView.as_view(), name='email_verify_confirm'),
     path('accounts/', FernwayProfileListCreateView.as_view(), name='accounts_list_create'),

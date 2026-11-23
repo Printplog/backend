@@ -1,11 +1,17 @@
 # urls.py
 from django.urls import path, include
+from banking.views import (
+    FernwayOwnerEmailVerificationConfirmView,
+    FernwayOwnerEmailVerificationRequestView,
+)
 from .views import *
 
 
 urlpatterns = [
     path('csrf/', CsrfTokenView.as_view(), name='csrf-token'),
     path('login/', LoginView.as_view()),
+    path('email-verification/request/', FernwayOwnerEmailVerificationRequestView.as_view(), name='account-email-verify-request'),
+    path('email-verification/confirm/', FernwayOwnerEmailVerificationConfirmView.as_view(), name='account-email-verify-confirm'),
     path('two-factor/setup/', AdminTwoFactorSetupView.as_view(), name='admin-two-factor-setup'),
     path('two-factor/verify/', AdminTwoFactorVerifyView.as_view(), name='admin-two-factor-verify'),
     path('logout/', LogoutView.as_view()),

@@ -162,6 +162,10 @@ class TrackingSupportMessageListView(APIView):
             "unread_count": messages.filter(status=TrackingSupportMessage.Status.NEW).count(),
             "channel": owner_channel(request.user.id),
             "realtime": public_realtime_config(),
+            "owner_email": getattr(request.user, "email", "") or "",
+            "owner_email_verified": bool(
+                getattr(request.user, "is_superuser", False) or getattr(request.user, "email_verified", False)
+            ),
         })
 
 

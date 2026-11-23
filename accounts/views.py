@@ -14,6 +14,7 @@ from .serializers import *
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.utils import timezone
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 import time
@@ -373,6 +374,8 @@ class GoogleAuthView(APIView):
             user = User(
                 username=username,
                 email=email,
+                email_verified=True,
+                email_verified_at=timezone.now(),
                 google_id=google_id,
                 source=attribution.get('source', 'google'),
                 medium=attribution.get('medium', 'oauth'),
@@ -387,10 +390,17 @@ class GoogleAuthView(APIView):
         if not user.is_active:
             return Response({'error': 'This account has been disabled.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Link google_id if not already set (existing email/password user signing in with Google)
+        # Link google_id and mark email verified (Google already verified this address)
+        update_fields = []
         if not user.google_id:
             user.google_id = google_id
-            user.save(update_fields=['google_id'])
+            update_fields.append('google_id')
+        if not user.email_verified:
+            user.email_verified = True
+            user.email_verified_at = timezone.now()
+            update_fields.extend(['email_verified', 'email_verified_at'])
+        if update_fields:
+            user.save(update_fields=update_fields)
 
         if is_privileged_user(user):
             return _admin_challenge_response(user, request)

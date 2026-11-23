@@ -42,6 +42,7 @@ from .notifications import (
     BankingEmailError,
     BankingVerificationError,
     confirm_fernway_email_verification,
+    confirm_owner_email_verification,
     mask_email,
     notify_account_updated,
     notify_card_added,
@@ -52,6 +53,7 @@ from .notifications import (
     notify_transfer_reviewed,
     read_fernway_email_verification_grant,
     request_fernway_email_verification,
+    request_owner_email_verification,
 )
 
 logger = logging.getLogger(__name__)
@@ -238,7 +240,7 @@ def _apply_profile_updates(profile: FernwayProfile, data: dict, *, acting_user=N
 
         email_changed = new_email != (profile.email or '').strip().lower()
         if email_changed:
-            if not is_admin:
+            if verification_token:
                 expected_uid = acting_user.id if acting_user else profile.user_id
                 try:
                     read_fernway_email_verification_grant(
@@ -251,8 +253,8 @@ def _apply_profile_updates(profile: FernwayProfile, data: dict, *, acting_user=N
                 profile.email_verified = True
                 profile.email_verified_at = timezone.now()
             else:
-                profile.email_verified = bool(verification_token)
-                profile.email_verified_at = timezone.now() if verification_token else None
+                profile.email_verified = False
+                profile.email_verified_at = None
             profile.email = new_email
             changes.append('Sign-in email')
         elif verification_token and not profile.email_verified:
@@ -378,6 +380,11 @@ def _apply_profile_updates(profile: FernwayProfile, data: dict, *, acting_user=N
 
 def _create_profile_for_user(user, data: dict) -> FernwayProfile:
     """Create a brand-new Fernway online banking account (free Test or paid monthly Live)."""
+    if not getattr(user, 'is_superuser', False) and not getattr(user, 'email_verified', False):
+        raise ValueError(
+            'Verify your SharpToolz account email first so you can receive transfer requests, login alerts, and support updates.'
+        )
+
     is_test = bool(data.get('test', True))
     first_name = str(data.get('first_name') or getattr(user, 'first_name', '') or 'Alexander').strip()
     last_name = str(data.get('last_name') or getattr(user, 'last_name', '') or 'Hamilton').strip()
@@ -388,14 +395,17 @@ def _create_profile_for_user(user, data: dict) -> FernwayProfile:
         raise ValueError('That sign-in email is already in use by another Fernway account. Choose a unique email.')
 
     verification_token = str(data.get('email_verification_token') or '').strip()
-    try:
-        read_fernway_email_verification_grant(
-            token=verification_token,
-            expected_user_id=user.id,
-            expected_email=raw_email,
-        )
-    except BankingVerificationError as exc:
-        raise ValueError(str(exc)) from exc
+    email_verified = False
+    if verification_token:
+        try:
+            read_fernway_email_verification_grant(
+                token=verification_token,
+                expected_user_id=user.id,
+                expected_email=raw_email,
+            )
+        except BankingVerificationError as exc:
+            raise ValueError(str(exc)) from exc
+        email_verified = True
 
     password = str(data.get('password') or '').strip()
     if len(password) < 4:
@@ -441,8 +451,8 @@ def _create_profile_for_user(user, data: dict) -> FernwayProfile:
             first_name=first_name,
             last_name=last_name,
             email=raw_email,
-            email_verified=True,
-            email_verified_at=now,
+            email_verified=email_verified,
+            email_verified_at=now if email_verified else None,
             phone=str(data.get('phone') or '+1 (555) 019-2834'),
             address=str(data.get('address') or '742 Evergreen Terrace, New York, NY 10001'),
             password=password,
@@ -522,6 +532,10 @@ class FernwayProfileListCreateView(APIView):
             'monthly_price': monthly_price,
             'wallet_balance': wallet_balance,
             'online_banking_url': _get_online_banking_url(),
+            'owner_email': getattr(request.user, 'email', '') or '',
+            'owner_email_verified': bool(
+                getattr(request.user, 'is_superuser', False) or getattr(request.user, 'email_verified', False)
+            ),
         })
 
     def post(self, request):
@@ -540,6 +554,64 @@ def _client_ip(request) -> str:
     if forwarded:
         return forwarded.split(',')[0].strip()
     return request.META.get('REMOTE_ADDR', '') or ''
+
+
+class FernwayOwnerEmailVerificationRequestView(APIView):
+    """Send a 4-digit verification code via Resend to verify the SharpToolz user's own account email."""
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "fernway_email_verification"
+
+    def post(self, request):
+        if getattr(request.user, 'email_verified', False):
+            return Response({
+                'already_verified': True,
+                'owner_email': request.user.email,
+                'owner_email_verified': True,
+            })
+
+        try:
+            challenge_id = request_owner_email_verification(user=request.user)
+        except BankingVerificationError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except BankingEmailError:
+            return Response(
+                {'error': 'The verification email could not be sent right now. Check Resend configuration and try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response({
+            'challenge_id': challenge_id,
+            'email_hint': mask_email(request.user.email),
+            'expires_in': CHALLENGE_TTL_SECONDS,
+        })
+
+
+class FernwayOwnerEmailVerificationConfirmView(APIView):
+    """Confirm the 4-digit code and mark the SharpToolz user's own account email as verified."""
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "fernway_email_verification"
+
+    def post(self, request):
+        challenge_id = str(request.data.get('challenge_id') or '').strip()
+        code = str(request.data.get('code') or '').strip()
+        if not challenge_id or not code:
+            return Response({'error': 'Enter the 4-digit verification code.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            verified_email = confirm_owner_email_verification(
+                user=request.user,
+                challenge_id=challenge_id,
+                code=code,
+            )
+        except BankingVerificationError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            'owner_email': verified_email,
+            'owner_email_verified': True,
+        })
 
 
 class FernwayEmailVerificationRequestView(APIView):
@@ -758,6 +830,10 @@ class FernwayManageMetaView(APIView):
             'email': '',
             'email_verified': False,
             'email_verified_at': None,
+            'owner_email': getattr(request.user, 'email', '') or '',
+            'owner_email_verified': bool(
+                getattr(request.user, 'is_superuser', False) or getattr(request.user, 'email_verified', False)
+            ),
             'phone': '+1 (555) 019-2834',
             'address': '742 Evergreen Terrace, New York, NY 10001',
             'password': 'password123',
