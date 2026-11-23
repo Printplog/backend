@@ -7,11 +7,12 @@ from .views import (
     WalletStatsView, WalletListView, WalletAdjustView, PendingRequestsView, ApproveRequestView, RejectRequestView, TransactionHistoryView,
     PayoutListView, PayoutApproveView, PayoutRejectView,
     AiChatView, AiChatSessionViewSet, ContactView,
-    OwnerSupportRealtimeAuthView, PublicSupportRealtimeAuthView,
+    OwnerSupportRealtimeAuthView, OwnerSupportSettingsView, PublicSupportRealtimeAuthView,
     PublicTrackingSupportReplyView, PublicTrackingSupportThreadView,
-    PublicTrackingSupportView, ResendWebhookView, SupportEmailVerificationConfirmView,
-    SupportEmailVerificationRequestView, TrackingSupportMessageDetailView,
-    TrackingSupportMessageListView, TrackingSupportReplyView,
+    PublicTrackingSupportTypingView, PublicTrackingSupportView, ResendWebhookView,
+    SupportEmailVerificationConfirmView, SupportEmailVerificationRequestView,
+    TrackingSupportMessageDetailView, TrackingSupportMessageListView,
+    TrackingSupportReplyView, TrackingSupportTypingView,
 )
 from django.urls import path
 from django.urls import include
@@ -61,11 +62,14 @@ urlpatterns = [
     path("tracking-support/verify-email/confirm/", SupportEmailVerificationConfirmView.as_view(), name="tracking-support-email-confirm"),
     path("tracking-support/<uuid:message_id>/", PublicTrackingSupportThreadView.as_view(), name="tracking-support-public-thread"),
     path("tracking-support/<uuid:message_id>/replies/", PublicTrackingSupportReplyView.as_view(), name="tracking-support-public-reply"),
+    path("tracking-support/<uuid:message_id>/typing/", PublicTrackingSupportTypingView.as_view(), name="tracking-support-public-typing"),
     path("tracking-support/<uuid:message_id>/realtime-auth/", PublicSupportRealtimeAuthView.as_view(), name="tracking-support-public-realtime-auth"),
+    path("support/settings/", OwnerSupportSettingsView.as_view(), name="tracking-support-settings"),
     path("support/messages/", TrackingSupportMessageListView.as_view(), name="tracking-support-list"),
     path("support/realtime-auth/", OwnerSupportRealtimeAuthView.as_view(), name="tracking-support-owner-realtime-auth"),
     path("support/messages/<uuid:message_id>/", TrackingSupportMessageDetailView.as_view(), name="tracking-support-detail"),
     path("support/messages/<uuid:message_id>/replies/", TrackingSupportReplyView.as_view(), name="tracking-support-reply"),
+    path("support/messages/<uuid:message_id>/typing/", TrackingSupportTypingView.as_view(), name="tracking-support-typing"),
     path("webhooks/resend/", ResendWebhookView.as_view(), name="resend-webhook"),
 
     # Admin views

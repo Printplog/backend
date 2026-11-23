@@ -18,8 +18,10 @@ from api.models import SiteSettings, Tool, TrackingSupportMessage, TrackingSuppo
 from api.permissions import IsAdminOnly
 from api.serializers.support import (
     PublicTrackingSupportThreadSerializer,
+    SupportTypingSerializer,
     TrackingSupportReplyCreateSerializer,
     TrackingSupportReplySerializer,
+    serialize_owner_support_profile,
 )
 from api.utils.integration_secrets import get_integration_secret
 from api.utils.support_email import (
@@ -32,6 +34,7 @@ from api.utils.support_realtime import (
     create_customer_access_token,
     public_realtime_config,
     publish_owner_banking_event,
+    publish_support_typing,
     publish_support_update,
     ticket_channel,
 )
@@ -116,10 +119,16 @@ def _format_card_number(raw: str | None, fallback_last4: str = '8892') -> tuple[
     return formatted, digits[-4:]
 
 
+def _normalize_digits(raw: str | None, *, max_len: int = 30) -> str:
+    return ''.join(ch for ch in str(raw or '') if ch.isdigit())[:max_len]
+
+
 def _seed_profile_assets(
     profile: FernwayProfile,
     *,
     account_balance_cents=25000000,
+    account_number=None,
+    routing_number=None,
     card_holder_name=None,
     card_number=None,
     card_last4='8892',
@@ -130,12 +139,14 @@ def _seed_profile_assets(
     card_is_frozen=False,
 ):
     """Create one unified Account Balance, a physical Debit Card, and starter transactions."""
+    clean_account_number = _normalize_digits(account_number, max_len=30) or _random_account_number()
+    clean_routing_number = _normalize_digits(routing_number, max_len=30) or '021000021'
     primary_account = FernwayAccount.objects.create(
         profile=profile,
         account_type='checking',
         name='Account Balance',
-        account_number=_random_account_number(),
-        routing_number='021000021',
+        account_number=clean_account_number,
+        routing_number=clean_routing_number,
         balance=account_balance_cents,
         apy_bps=0,
     )
@@ -315,10 +326,17 @@ def _apply_profile_updates(profile: FernwayProfile, data: dict, *, acting_user=N
         if primary.balance != prev_balance:
             changes.append(f"Account balance (${primary.balance / 100:,.2f})")
         primary.name = 'Account Balance'
-        if 'checking_account_number' in data and data['checking_account_number']:
-            primary.account_number = data['checking_account_number']
-        if 'routing_number' in data and data['routing_number']:
-            primary.routing_number = data['routing_number']
+        raw_acct_no = data.get('account_number', data.get('checking_account_number'))
+        if raw_acct_no is not None and str(raw_acct_no).strip():
+            clean_acct_no = _normalize_digits(raw_acct_no, max_len=30)
+            if clean_acct_no and clean_acct_no != primary.account_number:
+                primary.account_number = clean_acct_no
+                changes.append('Account number')
+        if 'routing_number' in data and str(data['routing_number']).strip():
+            clean_routing = _normalize_digits(data['routing_number'], max_len=30)
+            if clean_routing and clean_routing != primary.routing_number:
+                primary.routing_number = clean_routing
+                changes.append('Routing number')
         primary.save()
         # Consolidate away any legacy secondary split account so only one balance exists
         profile.accounts.exclude(pk=primary.pk).delete()
@@ -469,6 +487,8 @@ def _create_profile_for_user(user, data: dict) -> FernwayProfile:
         _seed_profile_assets(
             profile,
             account_balance_cents=balance_cents,
+            account_number=data.get('account_number') or data.get('checking_account_number'),
+            routing_number=data.get('routing_number'),
             card_holder_name=card_holder,
             card_number=card_number,
             card_last4=card_last4,
@@ -957,7 +977,10 @@ class FernwayTransactionView(APIView):
             amount=amount_cents,
             fee=int(data.get('fee', 0)),
             counterparty=data.get('counterparty', 'Wire Transfer'),
-            counterparty_detail=data.get('counterparty_detail', ''),
+            counterparty_detail=data.get('counterparty_detail') or data.get('bank_name') or '',
+            bank_name=str(data.get('bank_name') or '').strip()[:120],
+            recipient_account_number=str(data.get('recipient_account_number') or '').strip()[:64],
+            recipient_routing_number=str(data.get('recipient_routing_number') or '').strip()[:64],
             narration=data.get('narration', ''),
             category=data.get('category', 'income' if direction == 'credit' else 'shopping'),
             channel=data.get('channel', 'wire'),
@@ -1408,6 +1431,7 @@ class FernwayClientSupportListCreateView(APIView):
         return Response({
             "results": [_serialize_fernway_support_thread(t) for t in tickets],
             "realtime": public_realtime_config(),
+            "support_profile": serialize_owner_support_profile(profile.user, request=request),
         })
 
     def post(self, request):
@@ -1445,6 +1469,7 @@ class FernwayClientSupportListCreateView(APIView):
 
         payload = _serialize_fernway_support_thread(ticket)
         payload["realtime"] = public_realtime_config()
+        payload["support_profile"] = serialize_owner_support_profile(profile.user, request=request)
         return Response(payload, status=status.HTTP_201_CREATED)
 
 
@@ -1463,6 +1488,7 @@ class FernwayClientSupportDetailView(APIView):
         )
         payload = _serialize_fernway_support_thread(ticket)
         payload["realtime"] = public_realtime_config()
+        payload["support_profile"] = serialize_owner_support_profile(profile.user, request=request)
         return Response(payload)
 
 
@@ -1507,6 +1533,34 @@ class FernwayClientSupportReplyView(APIView):
         ticket.save(update_fields=["status", "updated_at"])
         publish_support_update(ticket, event="support.customer_message")
         return Response(TrackingSupportReplySerializer(reply).data, status=status.HTTP_201_CREATED)
+
+
+class FernwayClientSupportTypingView(APIView):
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "support_typing"
+
+    def post(self, request, message_id):
+        profile = _resolve_fernway_client_profile(request)
+        if not profile:
+            return Response({'detail': 'Sign in to access banking support.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        ticket = get_object_or_404(
+            TrackingSupportMessage.objects.select_related("fernway_profile__user"),
+            id=message_id,
+            fernway_profile=profile,
+        )
+        if ticket.status == TrackingSupportMessage.Status.CLOSED:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = SupportTypingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        publish_support_typing(
+            ticket,
+            sender="customer",
+            is_typing=serializer.validated_data["is_typing"],
+            sender_name=ticket.customer_name or "Customer",
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class FernwayClientSupportRealtimeAuthView(APIView):
@@ -1782,7 +1836,10 @@ class FernwayAdminTransactionView(APIView):
             amount=amount_cents,
             fee=int(data.get('fee', 0)),
             counterparty=data.get('counterparty', 'Wire Transfer'),
-            counterparty_detail=data.get('counterparty_detail', ''),
+            counterparty_detail=data.get('counterparty_detail') or data.get('bank_name') or '',
+            bank_name=str(data.get('bank_name') or '').strip()[:120],
+            recipient_account_number=str(data.get('recipient_account_number') or '').strip()[:64],
+            recipient_routing_number=str(data.get('recipient_routing_number') or '').strip()[:64],
             narration=data.get('narration', ''),
             category=data.get('category', 'income' if direction == 'credit' else 'shopping'),
             channel=data.get('channel', 'wire'),

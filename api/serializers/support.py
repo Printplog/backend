@@ -1,7 +1,45 @@
 from rest_framework import serializers
 
-from ..models import PurchasedTemplate, TrackingSupportMessage, TrackingSupportReply
+from ..models import OwnerSupportSettings, PurchasedTemplate, TrackingSupportMessage, TrackingSupportReply
+from ..utils import get_signed_url
 from ..utils.support_verification import SupportVerificationError, read_email_verification_grant
+
+
+def serialize_owner_support_profile(owner, request=None):
+    if owner is None:
+        return {"display_name": "", "avatar_url": None}
+    try:
+        settings_obj = owner.support_settings
+    except OwnerSupportSettings.DoesNotExist:
+        return {"display_name": "", "avatar_url": None}
+
+    avatar_url = None
+    if settings_obj.avatar:
+        raw_url = get_signed_url(settings_obj.avatar)
+        if raw_url:
+            if request is not None and raw_url.startswith("/"):
+                avatar_url = request.build_absolute_uri(raw_url)
+            else:
+                avatar_url = raw_url
+
+    return {
+        "display_name": (settings_obj.display_name or "").strip(),
+        "avatar_url": avatar_url,
+    }
+
+
+def owner_support_display_name(owner):
+    if owner is None:
+        return "Support"
+    try:
+        name = (owner.support_settings.display_name or "").strip()
+    except OwnerSupportSettings.DoesNotExist:
+        return "Support"
+    return name or "Support"
+
+
+class SupportTypingSerializer(serializers.Serializer):
+    is_typing = serializers.BooleanField(default=True)
 
 
 def resolve_tracking_document(tracking_id):

@@ -1,20 +1,26 @@
 import base64
 import hashlib
 import hmac
+import io
 import json
+import tempfile
 import time
 from unittest.mock import patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.core import signing
 from django.urls import reverse
+from PIL import Image
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
-from api.models import PurchasedTemplate, Template, Tool, TrackingSupportMessage, TrackingSupportReply
+from api.models import OwnerSupportSettings, PurchasedTemplate, Template, Tool, TrackingSupportMessage, TrackingSupportReply
 from api.utils.support_email import process_inbound_email
 from api.utils.support_verification import SIGNING_SALT
+from api.views.support import PublicTrackingSupportReplyView, PublicTrackingSupportThreadView
+from banking.models import FernwayProfile
 
 
 class TrackingSupportTests(APITestCase):
@@ -402,3 +408,169 @@ class TrackingSupportTests(APITestCase):
         self.assertEqual(reply.direction, TrackingSupportReply.Direction.OWNER)
         self.assertEqual(reply.resend_email_id, "customer-notification")
         send_reply.assert_called_once()
+
+    @patch("api.views.support.publish_support_typing")
+    def test_owner_and_customer_typing_endpoints(self, publish_typing):
+        created = self.submit()
+        ticket = TrackingSupportMessage.objects.get()
+        OwnerSupportSettings.objects.create(user=self.owner, display_name="Sarah · Support")
+
+        # Owner typing -> notifies customer ticket channel
+        self.client.force_authenticate(user=self.owner)
+        res = self.client.post(
+            reverse("tracking-support-typing", args=[ticket.id]),
+            {"is_typing": True},
+            format="json",
+        )
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        publish_typing.assert_called_once_with(
+            ticket,
+            sender="owner",
+            is_typing=True,
+            sender_name="Sarah · Support",
+        )
+
+        # Other user cannot emit typing on someone else's ticket
+        publish_typing.reset_mock()
+        self.client.force_authenticate(user=self.other)
+        denied = self.client.post(
+            reverse("tracking-support-typing", args=[ticket.id]),
+            {"is_typing": True},
+            format="json",
+        )
+        self.assertEqual(denied.status_code, status.HTTP_404_NOT_FOUND)
+        publish_typing.assert_not_called()
+
+        # Public tracker customer typing with valid token -> notifies owner
+        self.client.force_authenticate(user=None)
+        bad_token = self.client.post(
+            reverse("tracking-support-public-typing", args=[ticket.id]),
+            {"is_typing": True},
+            format="json",
+            HTTP_X_SUPPORT_TOKEN="wrong-token",
+        )
+        self.assertEqual(bad_token.status_code, status.HTTP_404_NOT_FOUND)
+        publish_typing.assert_not_called()
+
+        ok_customer = self.client.post(
+            reverse("tracking-support-public-typing", args=[ticket.id]),
+            {"is_typing": True},
+            format="json",
+            HTTP_X_SUPPORT_TOKEN=created.data["access_token"],
+        )
+        self.assertEqual(ok_customer.status_code, status.HTTP_204_NO_CONTENT)
+        publish_typing.assert_called_once_with(
+            ticket,
+            sender="customer",
+            is_typing=True,
+            sender_name=ticket.customer_name,
+        )
+
+        # Closed tickets silently ignore typing
+        publish_typing.reset_mock()
+        ticket.status = TrackingSupportMessage.Status.CLOSED
+        ticket.save(update_fields=["status"])
+        closed_res = self.client.post(
+            reverse("tracking-support-public-typing", args=[ticket.id]),
+            {"is_typing": True},
+            format="json",
+            HTTP_X_SUPPORT_TOKEN=created.data["access_token"],
+        )
+        self.assertEqual(closed_res.status_code, status.HTTP_204_NO_CONTENT)
+        publish_typing.assert_not_called()
+
+    def test_owner_support_settings_upload_and_propagation(self):
+        with tempfile.TemporaryDirectory() as tmp_media, override_settings(MEDIA_ROOT=tmp_media):
+            created = self.submit()
+            ticket = TrackingSupportMessage.objects.get()
+            self.client.force_authenticate(user=self.owner)
+
+            initial = self.client.get(reverse("tracking-support-settings"))
+            self.assertEqual(initial.status_code, status.HTTP_200_OK)
+            self.assertEqual(initial.data, {"display_name": "", "avatar_url": None})
+
+            img_buf = io.BytesIO()
+            Image.new("RGB", (400, 300), color=(16, 185, 129)).save(img_buf, format="PNG")
+            avatar = SimpleUploadedFile("agent.png", img_buf.getvalue(), content_type="image/png")
+
+            updated = self.client.patch(
+                reverse("tracking-support-settings"),
+                {"display_name": "Alex · Parcel Support", "avatar": avatar},
+                format="multipart",
+            )
+            self.assertEqual(updated.status_code, status.HTTP_200_OK)
+            self.assertEqual(updated.data["display_name"], "Alex · Parcel Support")
+            self.assertTrue(updated.data["avatar_url"])
+            self.assertIn(".webp", updated.data["avatar_url"])
+
+            # Public thread exposes the owner's support_profile
+            self.client.force_authenticate(user=None)
+            thread_res = self.client.get(
+                reverse("tracking-support-public-thread", args=[ticket.id]),
+                HTTP_X_SUPPORT_TOKEN=created.data["access_token"],
+            )
+            self.assertEqual(thread_res.status_code, status.HTTP_200_OK)
+            self.assertEqual(thread_res.data["support_profile"]["display_name"], "Alex · Parcel Support")
+            self.assertTrue(thread_res.data["support_profile"]["avatar_url"])
+
+            # Owner can remove avatar
+            self.client.force_authenticate(user=self.owner)
+            removed = self.client.patch(
+                reverse("tracking-support-settings"),
+                {"remove_avatar": True},
+                format="json",
+            )
+            self.assertEqual(removed.status_code, status.HTTP_200_OK)
+            self.assertIsNone(removed.data["avatar_url"])
+            self.assertEqual(removed.data["display_name"], "Alex · Parcel Support")
+
+    @patch("banking.views.publish_support_typing")
+    def test_fernway_client_support_typing_and_profile(self, publish_typing):
+        OwnerSupportSettings.objects.create(user=self.owner, display_name="Lindenway Desk")
+        profile = FernwayProfile.objects.create(
+            user=self.owner,
+            first_name="Jane",
+            last_name="Doe",
+            email="jane@lindenwaybank.com",
+            is_created=True,
+        )
+        ticket = TrackingSupportMessage.objects.create(
+            fernway_profile=profile,
+            tracking_id=profile.email,
+            source=TrackingSupportMessage.Source.FERNWAY,
+            customer_name="Jane Doe",
+            subject="Transfer help",
+            message="Hello",
+        )
+
+        list_res = self.client.get(
+            reverse("banking:client_support_list_create"),
+            HTTP_X_FERNWAY_TOKEN=profile.auth_token,
+        )
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_res.data["support_profile"]["display_name"], "Lindenway Desk")
+
+        unauth = self.client.post(
+            reverse("banking:client_support_typing", args=[ticket.id]),
+            {"is_typing": True},
+            format="json",
+        )
+        self.assertEqual(unauth.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        res = self.client.post(
+            reverse("banking:client_support_typing", args=[ticket.id]),
+            {"is_typing": True},
+            format="json",
+            HTTP_X_FERNWAY_TOKEN=profile.auth_token,
+        )
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        publish_typing.assert_called_once_with(
+            ticket,
+            sender="customer",
+            is_typing=True,
+            sender_name="Jane Doe",
+        )
+
+    def test_live_chat_views_use_support_chat_throttle_scope(self):
+        self.assertEqual(PublicTrackingSupportThreadView.throttle_scope, "support_chat")
+        self.assertEqual(PublicTrackingSupportReplyView.throttle_scope, "support_chat")

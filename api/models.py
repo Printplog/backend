@@ -403,6 +403,26 @@ class TrackingSupportReply(models.Model):
         return f"{self.get_direction_display()} reply on {self.support_message_id}"
 
 
+class OwnerSupportSettings(models.Model):
+    """Per-owner branding shown in live support chats (avatar photo & display name)."""
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="support_settings",
+    )
+    display_name = models.CharField(max_length=80, blank=True, default="")
+    avatar = models.ImageField(upload_to="support_avatars/", blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "owner support settings"
+        verbose_name_plural = "owner support settings"
+
+    def __str__(self):
+        return f"Support settings for {self.user}"
+
+
 class IntegrationSecret(models.Model):
     """Encrypted, write-only runtime credentials managed by a superuser."""
 

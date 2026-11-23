@@ -24,6 +24,7 @@ from .views import (
     FernwayClientSupportListCreateView,
     FernwayClientSupportDetailView,
     FernwayClientSupportReplyView,
+    FernwayClientSupportTypingView,
     FernwayClientSupportRealtimeAuthView,
     FernwayAdminAccountListView,
     FernwayAdminAccountDetailView,
@@ -73,6 +74,7 @@ urlpatterns = [
     path('client/support/', FernwayClientSupportListCreateView.as_view(), name='client_support_list_create'),
     path('client/support/<uuid:message_id>/', FernwayClientSupportDetailView.as_view(), name='client_support_detail'),
     path('client/support/<uuid:message_id>/replies/', FernwayClientSupportReplyView.as_view(), name='client_support_reply'),
+    path('client/support/<uuid:message_id>/typing/', FernwayClientSupportTypingView.as_view(), name='client_support_typing'),
     path('client/support/<uuid:message_id>/realtime-auth/', FernwayClientSupportRealtimeAuthView.as_view(), name='client_support_realtime_auth'),
 
     # SharpToolz Admin Endpoints (manage all users' online banking accounts)

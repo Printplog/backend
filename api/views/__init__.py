@@ -16,9 +16,11 @@ from .ai_chat.sessions import AiChatSessionViewSet
 from .contact import ContactView
 from .support import (
     OwnerSupportRealtimeAuthView,
+    OwnerSupportSettingsView,
     PublicSupportRealtimeAuthView,
     PublicTrackingSupportReplyView,
     PublicTrackingSupportThreadView,
+    PublicTrackingSupportTypingView,
     PublicTrackingSupportView,
     ResendWebhookView,
     SupportEmailVerificationConfirmView,
@@ -26,4 +28,5 @@ from .support import (
     TrackingSupportMessageDetailView,
     TrackingSupportMessageListView,
     TrackingSupportReplyView,
+    TrackingSupportTypingView,
 )
