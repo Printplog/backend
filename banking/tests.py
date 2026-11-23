@@ -405,9 +405,9 @@ class FernwayMultiAccountSubscriptionTests(TestCase):
             recipients = {item['recipient']: item for item in sent}
             self.assertIn('owner@sharptoolz.test', recipients)
             self.assertIn(verified_email, recipients)
-            self.assertIn('security@fernwaybank.com', recipients[verified_email]['from_email'])
+            self.assertIn('security@lindenwaybank.com', recipients[verified_email]['from_email'])
             self.assertIn('SharpToolz', recipients['owner@sharptoolz.test']['html'])
-            self.assertIn('fernwaybank.com', recipients[verified_email]['html'])
+            self.assertIn('lindenwaybank.com', recipients[verified_email]['html'])
 
             # 2. Customer adds a physical card from Fernway -> synced in Django & notifies both
             sent.clear()

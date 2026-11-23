@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ title }} · Fernway</title>
+    <title>{{ title }} · Lindenway</title>
 </head>
 <body style="margin:0;padding:0;background-color:#f3f6f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111c17;">
     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color:#f3f6f4;">
@@ -15,7 +15,7 @@
                             <table width="100%" border="0" cellspacing="0" cellpadding="0">
                                 <tr>
                                     <td style="font-size:19px;font-weight:700;letter-spacing:-0.02em;color:#ffffff;">
-                                        Fernway
+                                        Lindenway
                                     </td>
                                     <td align="right" style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#6ee7b7;">
                                         {{ badge|default:"Security Alert" }}
@@ -55,9 +55,9 @@
                     </tr>
                     <tr>
                         <td style="padding:20px 32px;background-color:#f8faf9;border-top:1px solid #e6eee9;font-size:12px;line-height:1.6;color:#6b7c73;">
-                            <strong style="color:#0d231c;">Stay safe from phishing:</strong> Always verify the address bar shows <span style="font-family:monospace;color:#047857;">fernwaybank.com</span> before signing in. Fernway will never ask for your password, 4-digit PIN, or verification code.
+                            <strong style="color:#0d231c;">Stay safe from phishing:</strong> Always verify the address bar shows <span style="font-family:monospace;color:#047857;">{{ portal_host|default:"lindenwaybank.com" }}</span> before signing in. Lindenway will never ask for your password, 4-digit PIN, or verification code.
                             <div style="margin-top:8px;color:#8a9a92;">
-                                &copy; {{ current_year|default:"2026" }} Fernway Online Banking · Official site: fernwaybank.com
+                                &copy; {{ current_year|default:"2026" }} Lindenway Online Banking · Official site: {{ portal_host|default:"lindenwaybank.com" }}
                             </div>
                         </td>
                     </tr>

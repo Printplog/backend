@@ -34,7 +34,7 @@ def _brand_for_source(source):
         }
     if source == TrackingSupportMessage.Source.FERNWAY:
         return {
-            "name": "Fernway Banking",
+            "name": "Lindenway Banking",
             "from": settings.FERNWAY_SUPPORT_FROM_EMAIL,
             "domain": settings.FERNWAY_SUPPORT_DOMAIN.lower(),
         }

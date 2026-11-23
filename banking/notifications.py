@@ -136,19 +136,20 @@ def request_fernway_email_verification(*, user_id: int, email: str) -> str:
         "emails/banking/fernway_verification_code.html",
         {
             "code": code,
+            "portal_host": _fernway_portal_host(),
             "current_year": timezone.now().year,
         },
     )
     text = (
-        f"Your Fernway email verification code is {code}. "
-        "Enter this 4-digit code in SharpToolz to verify this email for Fernway notifications. "
+        f"Your Lindenway email verification code is {code}. "
+        "Enter this 4-digit code in SharpToolz to verify this email for Lindenway notifications. "
         "It expires in 10 minutes."
     )
     try:
         _send_resend_email(
             from_email=settings.FERNWAY_SECURITY_FROM_EMAIL,
             recipient=normalized,
-            subject=f"{code} is your Fernway verification code",
+            subject=f"{code} is your Lindenway verification code",
             html=html,
             text=text,
             tags=[
@@ -396,10 +397,11 @@ def _send_fernway_customer_email(
         "intro": intro,
         "details": details,
         "footer_note": footer_note,
+        "portal_host": _fernway_portal_host(),
         "current_year": timezone.now().year,
     }
     html = render_to_string("emails/banking/fernway_alert.html", context)
-    text_lines = [f"Fernway — {title}", intro, ""] + [f"{row['label']}: {row['value']}" for row in details]
+    text_lines = [f"Lindenway — {title}", intro, ""] + [f"{row['label']}: {row['value']}" for row in details]
     if footer_note:
         text_lines += ["", footer_note]
     text = strip_tags("\n".join(text_lines))
@@ -426,7 +428,7 @@ def notify_login(profile, *, ip_address: str = "", user_agent: str = ""):
 
     owner_details = [
         {"label": "Account Holder", "value": holder},
-        {"label": "Fernway Email", "value": profile.email, "mono": True, "highlight": True},
+        {"label": "Lindenway Email", "value": profile.email, "mono": True, "highlight": True},
         {"label": "Time", "value": when},
         {"label": "IP Address", "value": ip_label, "mono": True},
         {"label": "Device", "value": device_label},
@@ -441,10 +443,10 @@ def notify_login(profile, *, ip_address: str = "", user_agent: str = ""):
     def _run():
         _send_owner_email(
             profile=profile,
-            subject=f"Fernway Login Alert: {holder} signed in",
-            badge="Fernway Activity",
-            title="New sign-in to your Fernway account",
-            subtitle=f"Someone signed in to {profile.email} on Fernway Online Banking.",
+            subject=f"Lindenway Login Alert: {holder} signed in",
+            badge="Lindenway Activity",
+            title="New sign-in to your Lindenway account",
+            subtitle=f"Someone signed in to {profile.email} on Lindenway Online Banking.",
             details=owner_details,
             action_path=f"/online-banking/{profile.id}",
             action_label="Open Account in SharpToolz",
@@ -452,12 +454,12 @@ def notify_login(profile, *, ip_address: str = "", user_agent: str = ""):
         )
         _send_fernway_customer_email(
             profile=profile,
-            subject="Security Alert: New sign-in to your Fernway account",
+            subject="Security Alert: New sign-in to your Lindenway account",
             badge="Sign-In Alert",
             title="New sign-in detected",
-            intro=f"Hi {profile.first_name}, your Fernway Online Banking account was just signed in to.",
+            intro=f"Hi {profile.first_name}, your Lindenway Online Banking account was just signed in to.",
             details=customer_details,
-            footer_note="If this was you, no action is needed. If you do not recognize this sign-in, contact Fernway Support immediately.",
+            footer_note="If this was you, no action is needed. If you do not recognize this sign-in, contact Lindenway Support immediately.",
             event_tag="login",
         )
 
@@ -544,7 +546,7 @@ def notify_transfer_reviewed(profile, tx, *, decision: str):
                 else f"Hi {profile.first_name}, your transfer request of {amount_str} to {tx.counterparty} could not be processed and the full amount has been refunded to your account balance."
             ),
             details=customer_details,
-            footer_note="Open Fernway Online Banking anytime to review your updated balance and transaction history.",
+            footer_note="Open Lindenway Online Banking anytime to review your updated balance and transaction history.",
             event_tag=f"transfer_{decision}",
         )
 
@@ -567,10 +569,10 @@ def notify_card_added(profile, card, *, actor: str = "customer"):
         if actor == "customer":
             _send_owner_email(
                 profile=profile,
-                subject=f"New Card Added on Fernway · {holder}",
+                subject=f"New Card Added on Lindenway · {holder}",
                 badge="Card Activity",
                 title=f"A new debit card was added ({card.label})",
-                subtitle=f"A card ending in {card.last4} was issued inside Fernway for {profile.email}.",
+                subtitle=f"A card ending in {card.last4} was issued inside Lindenway for {profile.email}.",
                 details=[{"label": "Account", "value": f"{holder} ({profile.email})"}] + details,
                 action_path=f"/online-banking/{profile.id}",
                 action_label="View Account in SharpToolz",
@@ -580,8 +582,8 @@ def notify_card_added(profile, card, *, actor: str = "customer"):
             profile=profile,
             subject=f"New Card Issued: {card.label} (•••• {card.last4})",
             badge="Card Issued",
-            title="Your new Fernway debit card is ready",
-            intro=f"Hi {profile.first_name}, a new physical debit card has been added to your Fernway account.",
+            title="Your new Lindenway debit card is ready",
+            intro=f"Hi {profile.first_name}, a new physical debit card has been added to your Lindenway account.",
             details=details,
             footer_note="You can freeze your card or adjust card controls anytime from the Cards screen.",
             event_tag="card_added",
@@ -608,10 +610,10 @@ def notify_card_updated(profile, card, *, changes: list[str], actor: str = "cust
         if actor == "customer":
             _send_owner_email(
                 profile=profile,
-                subject=f"Card Updated on Fernway · {summary}",
+                subject=f"Card Updated on Lindenway · {summary}",
                 badge="Card Activity",
                 title=f"Card settings changed ({card.last4})",
-                subtitle=f"Card controls were updated inside Fernway for {profile.email}.",
+                subtitle=f"Card controls were updated inside Lindenway for {profile.email}.",
                 details=[{"label": "Account", "value": f"{holder} ({profile.email})"}] + details,
                 action_path=f"/online-banking/{profile.id}",
                 action_label="Open Account in SharpToolz",
@@ -619,12 +621,12 @@ def notify_card_updated(profile, card, *, changes: list[str], actor: str = "cust
             )
         _send_fernway_customer_email(
             profile=profile,
-            subject=f"Fernway Card Alert: {summary}",
+            subject=f"Lindenway Card Alert: {summary}",
             badge="Card Security",
             title="Your card settings were updated",
-            intro=f"Hi {profile.first_name}, a change was made to your Fernway debit card ending in {card.last4}.",
+            intro=f"Hi {profile.first_name}, a change was made to your Lindenway debit card ending in {card.last4}.",
             details=details,
-            footer_note="If you did not make this change, contact Fernway Support immediately.",
+            footer_note="If you did not make this change, contact Lindenway Support immediately.",
             event_tag="card_updated",
         )
 
@@ -643,7 +645,7 @@ def _fernway_portal_base_url() -> str:
     env_url = (os.getenv("FERNWAY_APP_URL") or "").strip().rstrip("/")
     if env_url:
         return env_url
-    domain = getattr(settings, "FERNWAY_SUPPORT_DOMAIN", "fernwaybank.com") or "fernwaybank.com"
+    domain = getattr(settings, "FERNWAY_SUPPORT_DOMAIN", "lindenwaybank.com") or "lindenwaybank.com"
     return f"https://{domain}"
 
 
@@ -656,7 +658,7 @@ def _fernway_portal_host() -> str:
             return parsed.netloc
     except Exception:
         pass
-    return getattr(settings, "FERNWAY_SUPPORT_DOMAIN", "fernwaybank.com") or "fernwaybank.com"
+    return getattr(settings, "FERNWAY_SUPPORT_DOMAIN", "lindenwaybank.com") or "lindenwaybank.com"
 
 
 def send_fernway_credentials_email(profile) -> str:
@@ -694,7 +696,7 @@ def send_fernway_credentials_email(profile) -> str:
     text_lines = [
         f"Hi {profile.first_name or full_name},",
         "",
-        "Your Fernway online banking account is ready.",
+        "Your Lindenway online banking account is ready.",
         f"Sign-In Portal: {sign_in_url}",
         f"Sign-In Email: {recipient}",
         f"Password: {profile.password}",
@@ -707,7 +709,7 @@ def send_fernway_credentials_email(profile) -> str:
     email_id = _send_resend_email(
         from_email=settings.FERNWAY_SECURITY_FROM_EMAIL,
         recipient=recipient,
-        subject="Your Fernway Online Banking Sign-In Details",
+        subject="Your Lindenway Online Banking Sign-In Details",
         html=html,
         text=text,
         tags=[
@@ -747,9 +749,9 @@ def notify_transaction_posted(profile, tx):
             badge="Credit Alert" if is_credit else "Debit Alert",
             title="Funds credited to your account" if is_credit else "New account debit posted",
             intro=(
-                f"Hi {profile.first_name}, {amount_str} from {tx.counterparty} has been credited to your Fernway balance."
+                f"Hi {profile.first_name}, {amount_str} from {tx.counterparty} has been credited to your Lindenway balance."
                 if is_credit
-                else f"Hi {profile.first_name}, a debit of {amount_str} ({tx.counterparty}) was posted to your Fernway account."
+                else f"Hi {profile.first_name}, a debit of {amount_str} ({tx.counterparty}) was posted to your Lindenway account."
             ),
             details=details,
             footer_note=f"Sign in at {portal_host} to review your full statement.",
@@ -773,12 +775,12 @@ def notify_account_updated(profile, *, changes: list[str]):
     def _run():
         _send_fernway_customer_email(
             profile=profile,
-            subject="Account Update: Changes saved to your Fernway profile",
+            subject="Account Update: Changes saved to your Lindenway profile",
             badge="Account Update",
-            title="Your Fernway account was updated",
-            intro=f"Hi {profile.first_name}, the following changes were saved to your Fernway Online Banking account.",
+            title="Your Lindenway account was updated",
+            intro=f"Hi {profile.first_name}, the following changes were saved to your Lindenway Online Banking account.",
             details=details,
-            footer_note="If you have questions about these updates, reach out via live support inside Fernway.",
+            footer_note="If you have questions about these updates, reach out via live support inside Lindenway.",
             event_tag="account_updated",
         )
 

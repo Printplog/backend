@@ -603,6 +603,9 @@ DEFAULT_CORS_ORIGINS = [
     "https://devapi.sharptoolz.com",
     "https://parcelfinda.com",
     "https://myflightlookup.com",
+    "https://lindenwaybank.com",
+    "https://www.lindenwaybank.com",
+    "https://fernway.sharptoolz.com",
     "https://docs-maker-demo.vercel.app",
     "https://order-tracker-demo.vercel.app",
     "http://38.242.198.49",
@@ -618,6 +621,9 @@ DEFAULT_CSRF_ORIGINS = [
     "https://devapi.sharptoolz.com",
     "https://parcelfinda.com",
     "https://myflightlookup.com",
+    "https://lindenwaybank.com",
+    "https://www.lindenwaybank.com",
+    "https://fernway.sharptoolz.com",
 ]
 
 CORS_ALLOWED_ORIGINS = env_list(
@@ -746,11 +752,11 @@ FLIGHT_SUPPORT_FROM_EMAIL = os.getenv(
 )
 FERNWAY_SUPPORT_FROM_EMAIL = os.getenv(
     "FERNWAY_SUPPORT_FROM_EMAIL",
-    "Fernway Support <support@fernwaybank.com>",
+    "Lindenway Support <support@lindenwaybank.com>",
 )
 FERNWAY_SECURITY_FROM_EMAIL = os.getenv(
     "FERNWAY_SECURITY_FROM_EMAIL",
-    "Fernway Security <security@fernwaybank.com>",
+    "Lindenway Security <security@lindenwaybank.com>",
 )
 SHARPTOOLZ_NOTIFICATIONS_FROM_EMAIL = os.getenv(
     "SHARPTOOLZ_NOTIFICATIONS_FROM_EMAIL",
@@ -758,7 +764,7 @@ SHARPTOOLZ_NOTIFICATIONS_FROM_EMAIL = os.getenv(
 )
 PARCEL_SUPPORT_DOMAIN = os.getenv("PARCEL_SUPPORT_DOMAIN", "parcelfinda.com")
 FLIGHT_SUPPORT_DOMAIN = os.getenv("FLIGHT_SUPPORT_DOMAIN", "myflightlookup.com")
-FERNWAY_SUPPORT_DOMAIN = os.getenv("FERNWAY_SUPPORT_DOMAIN", "fernwaybank.com")
+FERNWAY_SUPPORT_DOMAIN = os.getenv("FERNWAY_SUPPORT_DOMAIN", "lindenwaybank.com")
 
 # Defined after the block above so it wins over the SMTP backend.
 if TESTING:

@@ -75,15 +75,20 @@ class TrackingSupportMessageSerializer(serializers.ModelSerializer):
     document_id = serializers.UUIDField(read_only=True, allow_null=True)
     fernway_profile_id = serializers.UUIDField(read_only=True, allow_null=True)
     document_name = serializers.SerializerMethodField()
-    source_label = serializers.CharField(source="get_source_display", read_only=True)
+    source_label = serializers.SerializerMethodField()
     conversation = serializers.SerializerMethodField()
+
+    def get_source_label(self, obj):
+        if obj.source == TrackingSupportMessage.Source.FERNWAY:
+            return "Lindenway Banking"
+        return obj.get_source_display()
 
     def get_document_name(self, obj):
         if obj.document_id and obj.document:
             return obj.document.name
         if obj.fernway_profile_id and obj.fernway_profile:
             full_name = f"{obj.fernway_profile.first_name} {obj.fernway_profile.last_name}".strip()
-            return f"Fernway · {full_name or obj.fernway_profile.email}"
+            return f"Lindenway · {full_name or obj.fernway_profile.email}"
         return ""
 
     def get_conversation(self, obj):

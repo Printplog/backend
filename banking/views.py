@@ -150,7 +150,7 @@ def _seed_profile_assets(
     FernwayCard.objects.create(
         profile=profile,
         account=primary_account,
-        label='Fernway Physical Debit Card',
+        label='Lindenway Physical Debit Card',
         kind='physical',
         brand='visa',
         card_number=formatted_number,
@@ -237,7 +237,7 @@ def _apply_profile_updates(profile: FernwayProfile, data: dict, *, acting_user=N
         if '@' not in new_email:
             raise ValueError('Please enter a valid sign-in email address.')
         if FernwayProfile.objects.filter(email__iexact=new_email).exclude(pk=profile.pk).exists():
-            raise ValueError('Another Fernway online banking account already uses that sign-in email.')
+            raise ValueError('Another Lindenway online banking account already uses that sign-in email.')
 
         email_changed = new_email != (profile.email or '').strip().lower()
         if email_changed:
@@ -393,7 +393,7 @@ def _create_profile_for_user(user, data: dict) -> FernwayProfile:
     if not raw_email or '@' not in raw_email:
         raise ValueError('Please enter a valid sign-in email address.')
     if FernwayProfile.objects.filter(email__iexact=raw_email).exists():
-        raise ValueError('That sign-in email is already in use by another Fernway account. Choose a unique email.')
+        raise ValueError('That sign-in email is already in use by another Lindenway account. Choose a unique email.')
 
     verification_token = str(data.get('email_verification_token') or '').strip()
     email_verified = False
@@ -437,7 +437,7 @@ def _create_profile_for_user(user, data: dict) -> FernwayProfile:
                 )
             wallet.debit(
                 price,
-                description=f'Fernway Online Banking ({raw_email}) - Monthly Live Subscription (30 days)',
+                description=f'Lindenway Online Banking ({raw_email}) - Monthly Live Subscription (30 days)',
             )
             sub_status = 'active'
             sub_start = now
@@ -645,7 +645,7 @@ class FernwayEmailVerificationRequestView(APIView):
             conflict_qs = conflict_qs.exclude(pk=profile_id)
         if conflict_qs.exists():
             return Response(
-                {'error': 'That email is already used by another Fernway account. Choose a different email.'},
+                {'error': 'That email is already used by another Lindenway account. Choose a different email.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -746,7 +746,7 @@ class FernwayProfileUpgradeView(APIView):
                 )
             wallet.debit(
                 price,
-                description=f'Fernway Online Banking ({profile.email}) - Live Monthly Activation (30 days)',
+                description=f'Lindenway Online Banking ({profile.email}) - Live Monthly Activation (30 days)',
             )
             profile.is_created = True
             profile.is_test = False
@@ -786,7 +786,7 @@ class FernwayProfileRenewView(APIView):
                 )
             wallet.debit(
                 price,
-                description=f'Fernway Online Banking ({profile.email}) - Monthly Subscription Renewal (30 days)',
+                description=f'Lindenway Online Banking ({profile.email}) - Monthly Subscription Renewal (30 days)',
             )
             profile.is_created = True
             profile.is_test = False
